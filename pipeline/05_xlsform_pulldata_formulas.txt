@@ -1,0 +1,123 @@
+## Tool 2 XLSForm Modifications — pulldata() Auto-fill
+## =====================================================================
+## Add these rows to the Tool 2 (pcn_tool.xlsx) survey sheet.
+## Each row goes ABOVE the existing question it auto-fills.
+## The enumerator selects the PCN → these fields populate automatically.
+##
+## COLUMN VALUES TO SET:
+##   type        = calculate
+##   name        = (same as the Tool 2 question name)
+##   calculation = pulldata('pcn_lookup', 'FIELD_NAME', 'pcn_key', ${facility})
+##
+## Then on the ORIGINAL question (integer/decimal type), change:
+##   default     = ${FIELD_NAME}        ← this pre-fills it with the calculated value
+##   relevant    = false()              ← hides it (enumerator can't change it)
+##   OR leave visible so enumerator can verify/correct if needed
+## =====================================================================
+
+## SECTION: SUPPORT SUPERVISION
+## Original question: no_hfs_support (integer)
+type=calculate  name=calc_no_hfs_support
+calculation=pulldata('pcn_lookup', 'no_hfs_support', 'pcn_key', ${facility})
+## On no_hfs_support question, add:  default=${calc_no_hfs_support}
+
+## SECTION: HEALTH CARE FINANCING
+## Original question: hfs_empaneled_sha (integer)
+type=calculate  name=calc_hfs_empaneled_sha
+calculation=pulldata('pcn_lookup', 'hfs_empaneled_sha', 'pcn_key', ${facility})
+
+## Original question: claims_reimbursed_hfs (integer)
+type=calculate  name=calc_claims_reimbursed_hfs
+calculation=pulldata('pcn_lookup', 'claims_reimbursed_hfs', 'pcn_key', ${facility})
+
+## Original question: clients_access_shif (integer)
+type=calculate  name=calc_clients_access_shif
+calculation=pulldata('pcn_lookup', 'clients_access_shif', 'pcn_key', ${facility})
+
+## Original question: clients_access_cash (integer)
+type=calculate  name=calc_clients_access_cash
+calculation=pulldata('pcn_lookup', 'clients_access_cash', 'pcn_key', ${facility})
+
+## Original question: fif_collected_rollback (integer)
+type=calculate  name=calc_fif_collected_rollback
+calculation=pulldata('pcn_lookup', 'fif_collected_rollback', 'pcn_key', ${facility})
+
+## Original question: people_waived_userfees (integer)
+type=calculate  name=calc_people_waived_userfees
+calculation=pulldata('pcn_lookup', 'people_waived_userfees', 'pcn_key', ${facility})
+
+## Original question: userfees_total_waived (integer)
+type=calculate  name=calc_userfees_total_waived
+calculation=pulldata('pcn_lookup', 'userfees_total_waived', 'pcn_key', ${facility})
+
+## SECTION: CAPACITY READINESS
+type=calculate  name=calc_facilities_22pharma_avail
+calculation=pulldata('pcn_lookup', 'facilities_22pharma_avail', 'pcn_key', ${facility})
+
+type=calculate  name=calc_facilities_23nonpharma_avail
+calculation=pulldata('pcn_lookup', 'facilities_23nonpharma_avail', 'pcn_key', ${facility})
+
+type=calculate  name=calc_blood_availability_hospitals
+calculation=pulldata('pcn_lookup', 'blood_availability_hospitals', 'pcn_key', ${facility})
+
+type=calculate  name=calc_stockout_22pharma_7days_month
+calculation=pulldata('pcn_lookup', 'stockout_22pharma_7days_month', 'pcn_key', ${facility})
+
+type=calculate  name=calc_stockout_23nonpharma_7days_months
+calculation=pulldata('pcn_lookup', 'stockout_23nonpharma_7days_months', 'pcn_key', ${facility})
+
+type=calculate  name=calc_hospitals_comp_lab_services
+calculation=pulldata('pcn_lookup', 'hospitals_comp_lab_services', 'pcn_key', ${facility})
+
+type=calculate  name=calc_spokes_basic_lab_services
+calculation=pulldata('pcn_lookup', 'spokes_basic_lab_services', 'pcn_key', ${facility})
+
+type=calculate  name=calc_allbasic_tracer_equipments
+calculation=pulldata('pcn_lookup', 'allbasic_tracer_equipments', 'pcn_key', ${facility})
+
+## SECTION: INFRASTRUCTURE
+type=calculate  name=calc_hfs_accessible_road
+calculation=pulldata('pcn_lookup', 'hfs_accessible_road', 'pcn_key', ${facility})
+
+type=calculate  name=calc_hfs_wash_facilities
+calculation=pulldata('pcn_lookup', 'hfs_wash_facilities', 'pcn_key', ${facility})
+
+type=calculate  name=calc_hfs_tracer_infra_keph
+calculation=pulldata('pcn_lookup', 'hfs_tracer_infra_keph', 'pcn_key', ${facility})
+
+type=calculate  name=calc_hfs_reliable_power
+calculation=pulldata('pcn_lookup', 'hfs_reliable_power', 'pcn_key', ${facility})
+
+## SECTION: HMIS / DIGITAL HEALTH
+type=calculate  name=calc_hfs_reliable_internet
+calculation=pulldata('pcn_lookup', 'hfs_reliable_internet', 'pcn_key', ${facility})
+
+type=calculate  name=calc_hfs_opd_tools_pcn
+calculation=pulldata('pcn_lookup', 'hfs_opd_tools_pcn', 'pcn_key', ${facility})
+
+type=calculate  name=calc_hfs_integrated_emr
+calculation=pulldata('pcn_lookup', 'hfs_integrated_emr', 'pcn_key', ${facility})
+
+## SECTION: HRH
+type=calculate  name=calc_hcws_skills_training_2yrs
+calculation=pulldata('pcn_lookup', 'hcws_skills_training_2yrs', 'pcn_key', ${facility})
+
+## SECTION: QUALITY OF CARE
+type=calculate  name=calc_hospitals_qit_functional
+calculation=pulldata('pcn_lookup', 'hospitals_qit_functional', 'pcn_key', ${facility})
+
+type=calculate  name=calc_spokes_wit_functional
+calculation=pulldata('pcn_lookup', 'spokes_wit_functional', 'pcn_key', ${facility})
+
+type=calculate  name=calc_ipc_items_availability
+calculation=pulldata('pcn_lookup', 'ipc_items_availability', 'pcn_key', ${facility})
+
+type=calculate  name=calc_clinical_guidelines_adherence
+calculation=pulldata('pcn_lookup', 'clinical_guidelines_adherence', 'pcn_key', ${facility})
+
+type=calculate  name=calc_absenteesm_phc_facilities
+calculation=pulldata('pcn_lookup', 'absenteesm_phc_facilities', 'pcn_key', ${facility})
+
+## SECTION: SOCIAL ACCOUNTABILITY
+type=calculate  name=calc_facilities_client_survey
+calculation=pulldata('pcn_lookup', 'facilities_client_survey', 'pcn_key', ${facility})
