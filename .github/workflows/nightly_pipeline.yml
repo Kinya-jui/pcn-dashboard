@@ -1,0 +1,68 @@
+name: PCN Data Pipeline
+
+on:
+  schedule:
+    - cron: '0 22 * * *'
+  workflow_dispatch:
+
+jobs:
+  run-pipeline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    env:
+      KOBO_TOKEN:     ${{ secrets.KOBO_TOKEN }}
+      KOBO_TOOL1_UID: ${{ secrets.KOBO_TOOL1_UID }}
+      KOBO_TOOL2_UID: ${{ secrets.KOBO_TOOL2_UID }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: r-lib/actions/setup-r@v2
+        with:
+          r-version: '4.3.2'
+
+      - uses: actions/cache@v3
+        with:
+          path: ${{ env.R_LIBS_USER }}
+          key: ${{ runner.os }}-r
+
+      - name: Install R packages
+        run: |
+          Rscript -e "
+            pkgs <- c('httr2','jsonlite','dplyr','readr','tidyr','stringr','purrr','curl')
+            missing <- pkgs[!pkgs %in% installed.packages()[,'Package']]
+            if (length(missing) > 0) install.packages(missing, repos='https://cloud.r-project.org')
+          "
+
+      - run: mkdir -p data
+
+      - name: Step 1 - Pull Tool 1 data from KoboToolbox
+        run: Rscript pipeline/01_pull_tool1_from_kobo.R
+
+      - name: Step 2 - Analyse and map to Tool 2 field names
+        run: Rscript pipeline/02_analyse_and_map_to_tool2.R
+
+      - name: Step 3 - Generate pcn_lookup.csv for pulldata
+        run: Rscript pipeline/03_generate_pulldata_csv.R
+
+      - name: Step 4 - Upload pcn_lookup.csv to KoboToolbox Tool 2
+        run: Rscript pipeline/04_upload_pulldata_to_kobo.R
+
+      - name: Commit pcn_lookup.csv to repo
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add data/pcn_lookup.csv
+          git diff --staged --quiet || git commit -m "chore: update pcn_lookup.csv [$(date -u '+%Y-%m-%d %H:%M UTC')]"
+          git push
+
+      - name: Upload outputs as artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pipeline-outputs-${{ github.run_number }}
+          path: data/
+          retention-days: 14
