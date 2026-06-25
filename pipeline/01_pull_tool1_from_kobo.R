@@ -59,5 +59,12 @@ names(raw_data) <- gsub("^[^/]+/", "", names(raw_data))
 # Save to disk for the analysis script to consume
 output_path <- "data/consolidated_facility_data.csv"
 dir.create("data", showWarnings = FALSE)
+# Flatten any nested list/matrix columns to JSON strings
+raw_data <- raw_data |>
+  mutate(across(where(is.list), ~ sapply(., function(x) {
+    if (is.null(x)) NA_character_
+    else paste(unlist(x), collapse = "; ")
+  })))
+
 write_csv(raw_data, output_path)
 cat(sprintf("  Saved to %s\n", output_path))
