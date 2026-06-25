@@ -12,7 +12,7 @@ library(readr)
 # --- Credentials (set these in .Renviron or GitHub Secrets) ---
 KOBO_TOKEN        <- Sys.getenv("KOBO_TOKEN")
 TOOL1_ASSET_UID   <- Sys.getenv("KOBO_TOOL1_UID")   # Facility Assessment Tool
-KOBO_BASE         <- "https://kf.kobotoolbox.org/api/v2/assets"
+KOBO_BASE         <- "https://eu.kobotoolbox.org/api/v2/assets"
 
 #DEBUG
 cat("TOKEN length:", nchar(KOBO_TOKEN), "\n")
