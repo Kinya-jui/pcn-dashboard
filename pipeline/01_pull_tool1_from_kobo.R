@@ -14,6 +14,11 @@ KOBO_TOKEN        <- Sys.getenv("KOBO_TOKEN")
 TOOL1_ASSET_UID   <- Sys.getenv("KOBO_TOOL1_UID")   # Facility Assessment Tool
 KOBO_BASE         <- "https://kf.kobotoolbox.org/api/v2/assets"
 
+#DEBUG
+cat("TOKEN length:", nchar(KOBO_TOKEN), "\n")
+cat("TOOL1 UID:", TOOL1_ASSET_UID, "\n")
+cat("API URL will be:", paste0(KOBO_BASE, "/", TOOL1_ASSET_UID, "/data/"), "\n")
+
 # --- Fetch all submissions from KoboToolbox ---
 fetch_kobo_all <- function(asset_uid, token) {
   all_results <- list()
