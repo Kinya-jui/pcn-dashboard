@@ -93,12 +93,11 @@ if (length(missing_fields) > 0) {
 }
 
 pulldata_csv <- pcn_data %>%
-  select(county, subcounty, pcn_name, all_of(available_fields)) %>%
+  select(county, subcounty, all_of(available_fields)) %>%
   mutate(
     # pcn_key: must match Tool 2 XLSForm choice names for the 'facility' question
-    pcn_key     = make_pcn_key(pcn_name),
+    pcn_key     = make_pcn_key(subcounty),
     # Keep human-readable labels for reference
-    pcn_label   = pcn_name,
     county_key  = make_pcn_key(county),
     subcounty_key = make_pcn_key(subcounty)
   ) %>%
@@ -112,8 +111,7 @@ pulldata_csv <- pcn_data %>%
   # Round all numerics to 1 decimal place
   mutate(across(where(is.numeric), ~ round(.x, 1))) %>%
   # Put key column first
-  select(pcn_key, pcn_label, county_key, subcounty_key, county, subcounty,
-         pcn_name, everything())
+  select(pcn_key, pcn_label, county_key, subcounty_key, county, subcounty, severything())
 
 cat(sprintf("  Built lookup table: %d PCNs × %d fields\n",
             nrow(pulldata_csv), length(AUTOFILL_FIELDS)))
