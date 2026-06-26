@@ -1,12 +1,11 @@
 # =============================================================================
 # 02_analyse_and_map_to_tool2.R
 # PURPOSE: Run all indicator computations on Tool 1 facility data,
-#          aggregate to PCN/subcounty level, and rename every column
+#          aggregate to PCN level, and rename every column
 #          to the EXACT Tool 2 question name using the confirmed mapping.
 #
 # MAPPING SOURCE: analysis_result_to_tool_2_codes.xlsx
-# COLUMN NAMES: Updated to match actual Kobo export variable names
-#               (confirmed from debug log of consolidated_facility_data.csv)
+# COLUMN NAMES: Verified against pcn_assessment_tool.xlsx (XLSForm survey sheet)
 # =============================================================================
 
 library(dplyr)
@@ -16,21 +15,6 @@ library(stringr)
 
 cat("Reading facility data...\n")
 pcn_data <- read_csv("data/consolidated_facility_data.csv", show_col_types = FALSE)
-# Normalise column names — map known variants to expected names
-col_aliases <- c(
-  "tracer_stock_out_nonpharma" = "tracer_stock_out_nonpharma",
-  "tracer_stockout_nonpharma"  = "tracer_stock_out_nonpharma",
-  "stockout_nonpharma"         = "tracer_stock_out_nonpharma",
-  "tracer_nphe"                = "tracer_nphe",
-  "tracer_nophe"               = "tracer_nphe",
-  "non_pharma"                 = "tracer_nphe"
-)
-for (alias in names(col_aliases)) {
-  target <- col_aliases[[alias]]
-  if (alias %in% names(pcn_data) && !target %in% names(pcn_data)) {
-    pcn_data <- pcn_data %>% rename(!!target := !!alias)
-  }
-}
 cat(sprintf("  %d facility rows, %d counties\n",
             nrow(pcn_data), n_distinct(pcn_data$county, na.rm = TRUE)))
 
@@ -41,19 +25,34 @@ avg   <- function(x) round(mean(as.numeric(x), na.rm = TRUE), 1)
 # n_yes: works on YES/NO text columns
 n_yes <- function(x) sum(tolower(trimws(as.character(x))) == "yes", na.rm = TRUE)
 
-# n_yes_num: works on already-numeric 1/0 columns
-n_yes_num <- function(x) sum(as.numeric(x) == 1, na.rm = TRUE)
+# count_selected: for select_multiple columns stored as space-separated strings,
+# counts how many options were selected per row then averages across facilities
+count_selected <- function(x) {
+  lengths <- sapply(strsplit(trimws(as.character(x)), " "), function(v) {
+    v <- v[v != "" & !is.na(v)]
+    length(v)
+  })
+  round(mean(lengths, na.rm = TRUE), 1)
+}
+
+# prop_selected: for select_multiple, what % of max_n options were selected on average
+prop_selected <- function(x, max_n) {
+  lengths <- sapply(strsplit(trimws(as.character(x)), " "), function(v) {
+    v <- v[v != "" & !is.na(v) & v != "NA"]
+    length(v)
+  })
+  round(mean(lengths / max_n * 100, na.rm = TRUE), 1)
+}
 
 # =============================================================================
-# STEP 1: Compute all analysis outputs at subcounty (PCN) level
-#         NOTE: Tool 1 has no dedicated pcn_name column — grouping by subcounty
-#               which maps 1:1 to a PCN in the PCN structure
+# STEP 1: Compute all analysis outputs at PCN level
+#         selected_pcn is the PCN field confirmed from XLSForm
 # =============================================================================
 
 cat("Computing PCN-level aggregates...\n")
 
 pcn_results <- pcn_data %>%
-  group_by(county, subcounty) %>%
+  group_by(county, subcounty, selected_pcn) %>%
   summarise(
     total_facilities = n(),
 
@@ -69,11 +68,13 @@ pcn_results <- pcn_data %>%
 
     # ── 2. SHA Reimbursement ─────────────────────────────────────────────────
     # Tool 1: Proportion_of_SHA_reimbursement → Tool 2: claims_reimbursed_hfs
-    Proportion_of_SHA_reimbursement       = avg(sha_reimbursed),
+    # sha_prop = calculated proportion field; sha_reimbursed = raw amount
+    Proportion_of_SHA_reimbursement       = avg(sha_prop),
 
     # ── 3. SHIF Access ───────────────────────────────────────────────────────
     # Tool 1: Proportion_of_clients_accessing_Health_Services_using_SHIF → Tool 2: clients_access_shif
-    Proportion_of_clients_accessing_Health_Services_using_SHIF = avg(shif_clients),
+    # shif_prop = calculated proportion of clients using SHIF
+    Proportion_of_clients_accessing_Health_Services_using_SHIF = avg(shif_prop),
 
     # ── 4. User Fee Waivers (count) ──────────────────────────────────────────
     # Tool 1: Total_clients_waived → Tool 2: people_waived_userfees
@@ -81,30 +82,28 @@ pcn_results <- pcn_data %>%
 
     # ── 5. Essential Medicines Availability ──────────────────────────────────
     # Tool 1: essential_medicines_availability_on_day_of_visit → Tool 2: facilities_22pharma_avail
-    # tracer_meds column holds the composite score directly
-    essential_medicines_availability_on_day_of_visit = avg(tracer_meds),
+    # tracer_meds = select_multiple with 23 tracer medicines options
+    essential_medicines_availability_on_day_of_visit = prop_selected(tracer_meds, 23),
 
     # ── 6. Non-pharma Availability ───────────────────────────────────────────
     # Tool 1: non_pharms_availability_on_day_of_visit → Tool 2: facilities_23nonpharma_avail
-    # tracer_nphe column holds the composite score directly
-    non_pharms_availability_on_day_of_visit = if ("tracer_nphe" %in% names(pcn_data))
-                                            avg(tracer_nphe)
-                                          else if ("tracer_nophe" %in% names(pcn_data))
-                                            avg(tracer_nophe)
-                                          else NA_real_,
+    # tracer_nphc = select_multiple with 23 non-pharma tracer items (XLSForm name: tracer_nphc)
+    non_pharms_availability_on_day_of_visit = prop_selected(tracer_nphc, 23),
 
     # ── 7. Blood Availability ────────────────────────────────────────────────
     # Tool 1: Availability_of_the_whole_blood_and_blood_components → Tool 2: blood_availability_hospitals
-    # Not captured in Tool 1 facility assessment — filled manually in Tool 2
+    # Not captured in Tool 1 — filled manually in Tool 2
     Availability_of_the_whole_blood_and_blood_components = NA_real_,
 
     # ── 8. Essential Medicines Stock-out ─────────────────────────────────────
     # Tool 1: essential_medicines_stock_out → Tool 2: stockout_22pharma_7days_month
-    essential_medicines_stock_out         = avg(tracer_stock_out_meds),
+    # tracer_stock_out_meds = select_multiple stock-out items (23 options)
+    essential_medicines_stock_out         = prop_selected(tracer_stock_out_meds, 23),
 
     # ── 9. Non-pharma Stock-out ──────────────────────────────────────────────
     # Tool 1: non_pharms_stock_out → Tool 2: stockout_23nonpharma_7days_months
-    non_pharms_stock_out                  = avg(tracer_stock_out_nonpharma),
+    # tracer_stock_out_nonpharms = select_multiple (XLSForm name: tracer_stock_out_nonpharms)
+    non_pharms_stock_out                  = prop_selected(tracer_stock_out_nonpharms, 23),
 
     # ── 10. Comprehensive Lab (hospitals) ────────────────────────────────────
     # Tool 1: percent_offering_lab → Tool 2: hospitals_comp_lab_services
@@ -118,114 +117,108 @@ pcn_results <- pcn_data %>%
 
     # ── 12. Basic Tracer Equipment ───────────────────────────────────────────
     # Tool 1: basic_equipment_availability → Tool 2: allbasic_tracer_equipments
-    # equipment_available holds the composite equipment score
-    basic_equipment_availability          = avg(equipment_available),
+    # equipment_available = select_multiple with basic equipment options
+    basic_equipment_availability          = prop_selected(equipment_available, 13),
 
     # ── 13. Clients Paying Cash ──────────────────────────────────────────────
     # Tool 1: Proportions_paid_through_cash → Tool 2: clients_access_cash
-    # Not directly captured in Tool 1 — set NA, filled manually in Tool 2
-    Proportions_paid_through_cash         = NA_real_,
+    # paid_cash_prop = calculated proportion paying cash
+    Proportions_paid_through_cash         = avg(paid_cash_prop),
 
     # ── 14. FIF Rollback ─────────────────────────────────────────────────────
     # Tool 1: Proportion_of_FIF_collected_rolled_back_to_the_facilities_within_PCN
     #       → Tool 2: fif_collected_rollback
-    # prop_fif = proportion of FIF rolled back
+    # prop_fif = calculated proportion of FIF rolled back
     Proportion_of_FIF_collected_rolled_back_to_the_facilities_within_PCN = avg(prop_fif),
 
     # ── 15. People Waived (proportion) ───────────────────────────────────────
     # Tool 1: Proportion_of_people_waived_for_user_fees_in_HFs_within_the_PCN
     #       → Tool 2: people_waived_userfees
-    Proportion_of_people_waived_for_user_fees_in_HFs_within_the_PCN = avg(clients_waived),
+    # waiver_prop = calculated proportion waived
+    Proportion_of_people_waived_for_user_fees_in_HFs_within_the_PCN = avg(waiver_prop),
 
     # ── 16. Total Amount Waived ──────────────────────────────────────────────
     # Tool 1: Total_amount_user_fee_waived_in_PCN → Tool 2: userfees_total_waived
-    # user_fee = total amount of user fees waived
+    # user_fee = total amount of user fees waived per facility
     Total_amount_user_fee_waived_in_PCN   = tot(user_fee),
 
     # ── 17. Road Network ─────────────────────────────────────────────────────
     # Tool 1: percentage_having_reliable_road_network → Tool 2: hfs_accessible_road
-    # No dedicated road column found — using conduct_ward_rounds as proxy
-    # (facilities doing ward rounds implies road access)
-    percentage_having_reliable_road_network = round(n_yes(conduct_ward_rounds) / n() * 100),
+    # roadinternet = YES/NO reliable road network (XLSForm name: roadinternet)
+    percentage_having_reliable_road_network = round(n_yes(roadinternet) / n() * 100),
 
     # ── 18. WASH ─────────────────────────────────────────────────────────────
     # Tool 1: WASH_Average_Percentage → Tool 2: hfs_wash_facilities
-    # Average across 4 WASH components
+    # Average of toilet_available + handwashing_place (both YES/NO)
     WASH_Average_Percentage               = round(
-      rowMeans(
-        pcn_data[pcn_data$subcounty == subcounty[1],
-                 intersect(c("toilet_available","handwashing_place",
-                             "handwashing_place_features","lpc_and_hygiene_items"),
-                           names(pcn_data))] %>%
-          mutate(across(everything(), ~ as.numeric(tolower(trimws(.)) == "yes"))),
-        na.rm = TRUE
-      ) %>% mean(na.rm = TRUE) * 100
+      (n_yes(toilet_available) + n_yes(handwashing_place)) / (2 * n()) * 100
     ),
 
     # ── 19. Infrastructure Items ─────────────────────────────────────────────
     # Tool 1: infrastructure_items_availability → Tool 2: hfs_tracer_infra_keph
-    # infrastructure_items = composite infrastructure score
-    infrastructure_items_availability     = avg(infrastructure_items),
+    # infrastructure_items = select_multiple tracer infrastructure items
+    infrastructure_items_availability     = prop_selected(infrastructure_items, 10),
 
     # ── 20. Reliable Power ───────────────────────────────────────────────────
     # Tool 1: percentage_having_reliable_power → Tool 2: hfs_reliable_power
+    # power = YES/NO reliable power source
     percentage_having_reliable_power      = round(n_yes(power) / n() * 100),
 
     # ── 21. Reliable Internet ────────────────────────────────────────────────
     # Tool 1: percentage_having_reliable_internet → Tool 2: hfs_reliable_internet
+    # internet = YES/NO reliable internet connection
     percentage_having_reliable_internet   = round(n_yes(internet) / n() * 100),
 
     # ── 22. OPD Reporting Tools ──────────────────────────────────────────────
     # Tool 1: reportingtools_availability → Tool 2: hfs_opd_tools_pcn
-    # opd_reporting_tools = composite reporting tools score
-    reportingtools_availability           = avg(opd_reporting_tools),
+    # opd_reporting_tools = select_multiple OPD reporting tools
+    reportingtools_availability           = prop_selected(opd_reporting_tools, 6),
 
     # ── 23. Functional EMR ───────────────────────────────────────────────────
     # Tool 1: percentage_having_functional_EMR → Tool 2: hfs_integrated_emr
-    # Not directly captured in Tool 1 — set NA, filled manually in Tool 2
-    percentage_having_functional_EMR      = NA_real_,
+    # emrpower = YES/NO integrated functional EMR (XLSForm name: emrpower)
+    percentage_having_functional_EMR      = round(n_yes(emrpower) / n() * 100),
 
     # ── 24. HCW Skills Training ──────────────────────────────────────────────
     # Tool 1: Health_care_workers_undergone_skills_competency_course → Tool 2: hcws_skills_training_2yrs
-    # competency_building = number/proportion of HCWs trained
-    Health_care_workers_undergone_skills_competency_course = avg(competency_building),
+    # competency_building = count of HCWs trained; competency_building_prop = proportion
+    Health_care_workers_undergone_skills_competency_course = avg(competency_building_prop),
 
     # ── 25. QIT ──────────────────────────────────────────────────────────────
     # Tool 1: qit_team_percentage → Tool 2: hospitals_qit_functional
-    # qit_team = YES/NO whether QIT team is functional
-    qit_team_percentage                   = round(n_yes(qit_team) / n() * 100),
+    # improvement_teams = select_one with options including qit/wit
+    # checking if "qit" appears in the improvement_teams value
+    qit_team_percentage                   = round(
+      sum(grepl("qit", tolower(as.character(improvement_teams)), fixed = TRUE), na.rm = TRUE) /
+        n() * 100
+    ),
 
     # ── 26. WIT ──────────────────────────────────────────────────────────────
     # Tool 1: wit_team_percentage → Tool 2: spokes_wit_functional
-    # wit_team = YES/NO whether WIT team is functional
-    wit_team_percentage                   = round(n_yes(wit_team) / n() * 100),
+    wit_team_percentage                   = round(
+      sum(grepl("wit", tolower(as.character(improvement_teams)), fixed = TRUE), na.rm = TRUE) /
+        n() * 100
+    ),
 
     # ── 27. IPC Average ──────────────────────────────────────────────────────
     # Tool 1: IPC_avg → Tool 2: ipc_items_availability
-    # lpc_and_hygiene_items used as IPC proxy from WASH section
-    IPC_avg                               = round(
-      mean(as.numeric(tolower(trimws(as.character(lpc_and_hygiene_items))) == "yes"),
-           na.rm = TRUE) * 100
-    ),
+    # ipc_and_hygiene_items = select_multiple IPC items in OPD
+    IPC_avg                               = prop_selected(ipc_and_hygiene_items, 5),
 
     # ── 28. Clinical Guidelines Adherence ────────────────────────────────────
     # Tool 1: Clinical_adherence → Tool 2: clinical_guidelines_adherence
-    # clinical_guidelines_adherence = direct score from Tool 1
-    Clinical_adherence                    = avg(clinical_guidelines_adherence),
+    # clinical_guidelines_adherence = select_multiple minimum clinical guidelines
+    Clinical_adherence                    = prop_selected(clinical_guidelines_adherence, 5),
 
     # ── 29. Staff Absenteeism ────────────────────────────────────────────────
     # Tool 1: Proportion_of_staff_absent → Tool 2: absenteesm_phc_facilities
-    # absenteeism = direct absenteeism score; present = staff present count
-    # Use absenteeism directly if available, else derive as 100 - avg(present/expected*100)
-    Proportion_of_staff_absent            = if ("absenteeism" %in% names(pcn_data))
-                                              avg(absenteeism)
-                                            else
-                                              round(100 - avg(present / expected * 100)),
+    # absenteesm = calculated field (note spelling matches XLSForm: absenteesm)
+    Proportion_of_staff_absent            = avg(absenteesm),
 
     # ── 30. Client Satisfaction Survey ───────────────────────────────────────
     # Tool 1: percent_done_client_satisfaction_survey → Tool 2: facilities_client_survey
-    # client_satisfaction = score or YES/NO for satisfaction survey done
-    percent_done_client_satisfaction_survey = avg(client_satisfaction),
+    # client_satisfaction = YES/NO has facility ever conducted satisfaction survey
+    percent_done_client_satisfaction_survey = round(n_yes(client_satisfaction) / n() * 100),
 
     .groups = "drop"
   )
