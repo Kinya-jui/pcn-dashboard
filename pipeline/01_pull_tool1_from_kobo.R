@@ -10,7 +10,6 @@ KOBO_TOKEN      <- Sys.getenv("KOBO_TOKEN")
 TOOL1_ASSET_UID <- Sys.getenv("KOBO_TOOL1_UID")
 KOBO_BASE       <- "https://eu.kobotoolbox.org/api/v2/assets"
 
-# DEBUG
 cat("TOKEN length:", nchar(KOBO_TOKEN), "\n")
 cat("TOOL1 UID: ***\n")
 cat("API URL will be:", paste0(KOBO_BASE, "/", TOOL1_ASSET_UID, "/data/"), "\n")
@@ -25,11 +24,32 @@ fetch_kobo_all <- function(asset_uid, token) {
       req_headers(Authorization = paste("Token", token)) |>
       req_perform()
     
-    body    <- resp_body_json(resp, simplifyVector = TRUE)
+    body    <- resp_body_json(resp, simplifyVector = FALSE)
     results <- body$results
     
     if (length(results) == 0) break
-    all_results <- c(all_results, list(as.data.frame(results)))
+    
+    # Flatten each submission individually
+    flat_list <- lapply(results, function(submission) {
+      flat <- list()
+      for (key in names(submission)) {
+        val <- submission[[key]]
+        if (is.null(val)) {
+          flat[[key]] <- NA_character_
+        } else if (is.list(val) || is.data.frame(val)) {
+          # Collapse nested structures to string
+          flat[[key]] <- tryCatch(
+            paste(unlist(val), collapse = "; "),
+            error = function(e) NA_character_
+          )
+        } else {
+          flat[[key]] <- as.character(val)
+        }
+      }
+      as.data.frame(flat, stringsAsFactors = FALSE, check.names = FALSE)
+    })
+    
+    all_results <- c(all_results, flat_list)
     
     if (is.null(body$`next`) || is.na(body$`next`)) break
     url <- body$`next`
@@ -42,27 +62,9 @@ cat("Fetching Tool 1 (Facility Assessment) data from KoboToolbox...\n")
 raw_data <- fetch_kobo_all(TOOL1_ASSET_UID, KOBO_TOKEN)
 cat(sprintf("  Fetched %d facility submissions\n", nrow(raw_data)))
 
-# Strip group prefixes
+# Strip group prefixes and deduplicate column names
 names(raw_data) <- gsub("^[^/]+/", "", names(raw_data))
-
-# Make column names unique
 names(raw_data) <- make.unique(names(raw_data), sep = "_")
-
-# Flatten list columns safely - column by column
-for (col in names(raw_data)) {
-  if (is.list(raw_data[[col]])) {
-    flat <- vector("character", nrow(raw_data))
-    for (i in seq_len(nrow(raw_data))) {
-      val <- raw_data[[col]][[i]]
-      if (is.null(val) || length(val) == 0 || all(is.na(val))) {
-        flat[i] <- NA_character_
-      } else {
-        flat[i] <- paste(unlist(val), collapse = "; ")
-      }
-    }
-    raw_data[[col]] <- flat
-  }
-}
 
 # Save
 output_path <- "data/consolidated_facility_data.csv"
