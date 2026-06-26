@@ -72,7 +72,11 @@ pcn_results <- pcn_data %>%
     # ── 6. Non-pharma Availability ───────────────────────────────────────────
     # Tool 1: non_pharms_availability_on_day_of_visit → Tool 2: facilities_23nonpharma_avail
     # tracer_nphe column holds the composite score directly
-    non_pharms_availability_on_day_of_visit = avg(tracer_nphe),
+    non_pharms_availability_on_day_of_visit = if ("tracer_nphe" %in% names(pcn_data))
+                                            avg(tracer_nphe)
+                                          else if ("tracer_nophe" %in% names(pcn_data))
+                                            avg(tracer_nophe)
+                                          else NA_real_,
 
     # ── 7. Blood Availability ────────────────────────────────────────────────
     # Tool 1: Availability_of_the_whole_blood_and_blood_components → Tool 2: blood_availability_hospitals
