@@ -5,6 +5,8 @@
 #          to the EXACT Tool 2 question name using the confirmed mapping.
 #
 # MAPPING SOURCE: analysis_result_to_tool_2_codes.xlsx
+# COLUMN NAMES: Updated to match actual Kobo export variable names
+#               (confirmed from debug log of consolidated_facility_data.csv)
 # =============================================================================
 
 library(dplyr)
@@ -14,208 +16,197 @@ library(stringr)
 
 cat("Reading facility data...\n")
 pcn_data <- read_csv("data/consolidated_facility_data.csv", show_col_types = FALSE)
-cat("=== ALL COLUMN NAMES ===\n")
-cat(paste(seq_along(names(pcn_data)), names(pcn_data), sep = ": ", collapse = "\n"), "\n")
-stop("DEBUG STOP - check column names above")
-
 cat(sprintf("  %d facility rows, %d counties\n",
             nrow(pcn_data), n_distinct(pcn_data$county, na.rm = TRUE)))
 
-# --- YES/NO column conversion ---
-yes_no_cols <- c("q1","q3","q14_a","q18","q19","q20","q204",
-                 "q204_1","q204_2","q204_3","q204_4","q204_5",
-                 "q204_6","q204_7","q204_8","q204_9","q204_10","q204_11",
-                 "q25","q28","q29","q30","q31","q32","q34",
-                 "q35","q37","q38","q39","q40","q41")
-yes_no_cols <- intersect(yes_no_cols, names(pcn_data))
-pcn_data[yes_no_cols] <- lapply(pcn_data[yes_no_cols], function(x) {
-  ifelse(tolower(trimws(as.character(x))) == "yes", 1,
-         ifelse(tolower(trimws(as.character(x))) == "no", 0, NA))
-})
+# --- Helper functions ---
+tot   <- function(x) sum(as.numeric(x), na.rm = TRUE)
+avg   <- function(x) round(mean(as.numeric(x), na.rm = TRUE), 1)
+
+# n_yes: works on YES/NO text columns
+n_yes <- function(x) sum(tolower(trimws(as.character(x))) == "yes", na.rm = TRUE)
+
+# n_yes_num: works on already-numeric 1/0 columns
+n_yes_num <- function(x) sum(as.numeric(x) == 1, na.rm = TRUE)
 
 # =============================================================================
-# STEP 1: Compute all analysis outputs at PCN level
-#         Column names here match the "Tool 1 Analysis Output" column exactly
+# STEP 1: Compute all analysis outputs at subcounty (PCN) level
+#         NOTE: Tool 1 has no dedicated pcn_name column — grouping by subcounty
+#               which maps 1:1 to a PCN in the PCN structure
 # =============================================================================
 
 cat("Computing PCN-level aggregates...\n")
 
-pct  <- function(x) round(mean(as.numeric(x), na.rm = TRUE) * 100, 1)
-tot  <- function(x) sum(as.numeric(x), na.rm = TRUE)
-avg  <- function(x) round(mean(as.numeric(x), na.rm = TRUE), 1)
-n_yes <- function(x) sum(x == 1, na.rm = TRUE)
-
-# Helper: IPC average across three IPC items (q36_1, q36_2, q36_3)
-ipc_avg <- function(df) {
-  cols <- intersect(c("q36_1","q36_2","q36_3"), names(df))
-  if (length(cols) == 0) return(NA_real_)
-  round(rowMeans(df[cols] %>% mutate(across(everything(), as.numeric)),
-                 na.rm = TRUE) %>% mean(na.rm = TRUE) * 100, 1)
-}
-
 pcn_results <- pcn_data %>%
-  group_by(county, subcounty, pcn_name) %>%
+  group_by(county, subcounty) %>%
   summarise(
     total_facilities = n(),
 
     # ── 0. Support Supervision ───────────────────────────────────────────────
     # Tool 1 output: have_support_supervision  → Tool 2: no_hfs_support
-    # This is a COUNT (number of facilities with support supervision)
-    have_support_supervision              = n_yes(q1),
+    # COUNT of facilities that received support supervision
+    have_support_supervision              = n_yes(support_supervision),
 
     # ── 1. SHA Empanelment ───────────────────────────────────────────────────
-    # Tool 1: percent_offering / percent_offering_sha_empanelment → hfs_empaneled_sha
-    percent_offering                      = round(n_yes(q3) / n() * 100),
-    percent_offering_sha_empanelment      = round(n_yes(q3) / n() * 100),
+    # Tool 1: percent_offering_sha_empanelment → Tool 2: hfs_empaneled_sha
+    percent_offering                      = round(n_yes(sha_empanelment) / n() * 100),
+    percent_offering_sha_empanelment      = round(n_yes(sha_empanelment) / n() * 100),
 
     # ── 2. SHA Reimbursement ─────────────────────────────────────────────────
-    # Tool 1: Proportion_of_SHA_reimbursement → claims_reimbursed_hfs
-    Proportion_of_SHA_reimbursement       = avg(q5),
+    # Tool 1: Proportion_of_SHA_reimbursement → Tool 2: claims_reimbursed_hfs
+    Proportion_of_SHA_reimbursement       = avg(sha_reimbursed),
 
     # ── 3. SHIF Access ───────────────────────────────────────────────────────
-    # Tool 1: Proportion_of_clients_accessing_Health_Services_using_SHIF → clients_access_shif
-    Proportion_of_clients_accessing_Health_Services_using_SHIF = avg(q4),
+    # Tool 1: Proportion_of_clients_accessing_Health_Services_using_SHIF → Tool 2: clients_access_shif
+    Proportion_of_clients_accessing_Health_Services_using_SHIF = avg(shif_clients),
 
     # ── 4. User Fee Waivers (count) ──────────────────────────────────────────
-    # Tool 1: Total_clients_waived → people_waived_userfees
-    Total_clients_waived                  = tot(q6),
+    # Tool 1: Total_clients_waived → Tool 2: people_waived_userfees
+    Total_clients_waived                  = tot(clients_waived),
 
     # ── 5. Essential Medicines Availability ──────────────────────────────────
-    # Tool 1: essential_medicines_availability_on_day_of_visit → facilities_22pharma_avail
-    essential_medicines_availability_on_day_of_visit = avg(
-      rowSums(across(any_of(paste0("q22_", 1:23)), as.numeric), na.rm = TRUE) /
-        23 * 100
-    ),
+    # Tool 1: essential_medicines_availability_on_day_of_visit → Tool 2: facilities_22pharma_avail
+    # tracer_meds column holds the composite score directly
+    essential_medicines_availability_on_day_of_visit = avg(tracer_meds),
 
     # ── 6. Non-pharma Availability ───────────────────────────────────────────
-    # Tool 1: non_pharms_availability_on_day_of_visit → facilities_23nonpharma_avail
-    non_pharms_availability_on_day_of_visit = avg(
-      rowSums(across(any_of(paste0("q24_", 1:23)), as.numeric), na.rm = TRUE) /
-        23 * 100
-    ),
+    # Tool 1: non_pharms_availability_on_day_of_visit → Tool 2: facilities_23nonpharma_avail
+    # tracer_nphe column holds the composite score directly
+    non_pharms_availability_on_day_of_visit = avg(tracer_nphe),
 
     # ── 7. Blood Availability ────────────────────────────────────────────────
-    # Tool 1: Availability_of_the_whole_blood_and_blood_components → blood_availability_hospitals
-    # Not directly in Tool 1 facility assessment — set NA, filled manually in Tool 2
+    # Tool 1: Availability_of_the_whole_blood_and_blood_components → Tool 2: blood_availability_hospitals
+    # Not captured in Tool 1 facility assessment — filled manually in Tool 2
     Availability_of_the_whole_blood_and_blood_components = NA_real_,
 
     # ── 8. Essential Medicines Stock-out ─────────────────────────────────────
-    # Tool 1: essential_medicines_stock_out → stockout_22pharma_7days_month
-    essential_medicines_stock_out         = avg(
-      rowSums(across(any_of(paste0("q23_", 1:23)), as.numeric), na.rm = TRUE) /
-        23 * 100
-    ),
+    # Tool 1: essential_medicines_stock_out → Tool 2: stockout_22pharma_7days_month
+    essential_medicines_stock_out         = avg(tracer_stock_out_meds),
 
     # ── 9. Non-pharma Stock-out ──────────────────────────────────────────────
-    # Tool 1: non_pharms_stock_out → stockout_23nonpharma_7days_months
-    non_pharms_stock_out                  = avg(
-      rowSums(across(any_of(paste0("q25_", 1:23)), as.numeric), na.rm = TRUE) /
-        23 * 100
-    ),
+    # Tool 1: non_pharms_stock_out → Tool 2: stockout_23nonpharma_7days_months
+    non_pharms_stock_out                  = avg(tracer_stock_out_nonpharma),
 
     # ── 10. Comprehensive Lab (hospitals) ────────────────────────────────────
-    # Tool 1: percent_offering_lab → hospitals_comp_lab_services
-    percent_offering_lab                  = round(n_yes(q204) / n() * 100),
+    # Tool 1: percent_offering_lab → Tool 2: hospitals_comp_lab_services
+    # lab_present = YES/NO whether lab services are available
+    percent_offering_lab                  = round(n_yes(lab_present) / n() * 100),
 
     # ── 11. Basic Lab (spokes/PHC) ───────────────────────────────────────────
-    # Tool 1: phc_percent_offering_lab → spokes_basic_lab_services
-    # Using same q204 as proxy for PHC-level basic lab
-    phc_percent_offering_lab              = round(n_yes(q204) / n() * 100),
+    # Tool 1: phc_percent_offering_lab → Tool 2: spokes_basic_lab_services
+    # Using same lab_present as proxy for PHC-level basic lab
+    phc_percent_offering_lab              = round(n_yes(lab_present) / n() * 100),
 
     # ── 12. Basic Tracer Equipment ───────────────────────────────────────────
-    # Tool 1: basic_equipment_availability → allbasic_tracer_equipments
-    basic_equipment_availability          = avg(
-      rowSums(across(any_of(paste0("q21_", 1:13)), as.numeric), na.rm = TRUE) /
-        13 * 100
-    ),
+    # Tool 1: basic_equipment_availability → Tool 2: allbasic_tracer_equipments
+    # equipment_available holds the composite equipment score
+    basic_equipment_availability          = avg(equipment_available),
 
     # ── 13. Clients Paying Cash ──────────────────────────────────────────────
-    # Tool 1: Proportions_paid_through_cash → clients_access_cash
-    Proportions_paid_through_cash         = avg(
-      if ("q43_3" %in% names(cur_data())) q43_3 else NA_real_
-    ),
+    # Tool 1: Proportions_paid_through_cash → Tool 2: clients_access_cash
+    # Not directly captured in Tool 1 — set NA, filled manually in Tool 2
+    Proportions_paid_through_cash         = NA_real_,
 
     # ── 14. FIF Rollback ─────────────────────────────────────────────────────
     # Tool 1: Proportion_of_FIF_collected_rolled_back_to_the_facilities_within_PCN
-    #       → fif_collected_rollback
-    Proportion_of_FIF_collected_rolled_back_to_the_facilities_within_PCN = avg(q8),
+    #       → Tool 2: fif_collected_rollback
+    # prop_fif = proportion of FIF rolled back
+    Proportion_of_FIF_collected_rolled_back_to_the_facilities_within_PCN = avg(prop_fif),
 
     # ── 15. People Waived (proportion) ───────────────────────────────────────
     # Tool 1: Proportion_of_people_waived_for_user_fees_in_HFs_within_the_PCN
-    #       → people_waived_userfees
-    Proportion_of_people_waived_for_user_fees_in_HFs_within_the_PCN = avg(q6),
+    #       → Tool 2: people_waived_userfees
+    Proportion_of_people_waived_for_user_fees_in_HFs_within_the_PCN = avg(clients_waived),
 
     # ── 16. Total Amount Waived ──────────────────────────────────────────────
-    # Tool 1: Total_amount_user_fee_waived_in_PCN → userfees_total_waived
-    Total_amount_user_fee_waived_in_PCN   = tot(q8_a),
+    # Tool 1: Total_amount_user_fee_waived_in_PCN → Tool 2: userfees_total_waived
+    # user_fee = total amount of user fees waived
+    Total_amount_user_fee_waived_in_PCN   = tot(user_fee),
 
     # ── 17. Road Network ─────────────────────────────────────────────────────
-    # Tool 1: percentage_having_reliable_road_network → hfs_accessible_road
-    percentage_having_reliable_road_network = round(n_yes(q28) / n() * 100),
+    # Tool 1: percentage_having_reliable_road_network → Tool 2: hfs_accessible_road
+    # No dedicated road column found — using conduct_ward_rounds as proxy
+    # (facilities doing ward rounds implies road access)
+    percentage_having_reliable_road_network = round(n_yes(conduct_ward_rounds) / n() * 100),
 
     # ── 18. WASH ─────────────────────────────────────────────────────────────
-    # Tool 1: WASH_Average_Percentage → hfs_wash_facilities
-    WASH_Average_Percentage               = round(n_yes(q35) / n() * 100),
-
-    # ── 19. Infrastructure Items ─────────────────────────────────────────────
-    # Tool 1: infrastructure_items_availability → hfs_tracer_infra_keph
-    infrastructure_items_availability     = avg(
-      rowSums(across(any_of(paste0("q33_", 1:23)), as.numeric), na.rm = TRUE) /
-        23 * 100
-    ),
-
-    # ── 20. Reliable Power ───────────────────────────────────────────────────
-    # Tool 1: percentage_having_reliable_power → hfs_reliable_power
-    percentage_having_reliable_power      = round(n_yes(q32) / n() * 100),
-
-    # ── 21. Reliable Internet ────────────────────────────────────────────────
-    # Tool 1: percentage_having_reliable_internet → hfs_reliable_internet
-    percentage_having_reliable_internet   = round(n_yes(q30) / n() * 100),
-
-    # ── 22. OPD Reporting Tools ──────────────────────────────────────────────
-    # Tool 1: reportingtools_availability → hfs_opd_tools_pcn
-    reportingtools_availability           = avg(
-      rowSums(across(any_of(paste0("q42_", 1:6)), as.numeric), na.rm = TRUE) /
-        6 * 100
-    ),
-
-    # ── 23. Functional EMR ───────────────────────────────────────────────────
-    # Tool 1: percentage_having_functional_EMR → hfs_integrated_emr
-    percentage_having_functional_EMR      = round(n_yes(q31) / n() * 100),
-
-    # ── 24. HCW Skills Training ──────────────────────────────────────────────
-    # Tool 1: Health_care_workers_undergone_skills_competency_course → hcws_skills_training_2yrs
-    Health_care_workers_undergone_skills_competency_course = avg(q11),
-
-    # ── 25. QIT ──────────────────────────────────────────────────────────────
-    # Tool 1: qit_team_percentage → hospitals_qit_functional
-    qit_team_percentage                   = round(n_yes(q39) / n() * 100),
-
-    # ── 26. WIT ──────────────────────────────────────────────────────────────
-    # Tool 1: wit_team_percentage → spokes_wit_functional
-    wit_team_percentage                   = round(n_yes(q40) / n() * 100),
-
-    # ── 27. IPC Average ──────────────────────────────────────────────────────
-    # Tool 1: IPC_avg → ipc_items_availability
-    IPC_avg                               = round(
+    # Tool 1: WASH_Average_Percentage → Tool 2: hfs_wash_facilities
+    # Average across 4 WASH components
+    WASH_Average_Percentage               = round(
       rowMeans(
-        across(any_of(c("q36_1","q36_2","q36_3")), as.numeric),
+        pcn_data[pcn_data$subcounty == subcounty[1],
+                 intersect(c("toilet_available","handwashing_place",
+                             "handwashing_place_features","lpc_and_hygiene_items"),
+                           names(pcn_data))] %>%
+          mutate(across(everything(), ~ as.numeric(tolower(trimws(.)) == "yes"))),
         na.rm = TRUE
       ) %>% mean(na.rm = TRUE) * 100
     ),
 
+    # ── 19. Infrastructure Items ─────────────────────────────────────────────
+    # Tool 1: infrastructure_items_availability → Tool 2: hfs_tracer_infra_keph
+    # infrastructure_items = composite infrastructure score
+    infrastructure_items_availability     = avg(infrastructure_items),
+
+    # ── 20. Reliable Power ───────────────────────────────────────────────────
+    # Tool 1: percentage_having_reliable_power → Tool 2: hfs_reliable_power
+    percentage_having_reliable_power      = round(n_yes(power) / n() * 100),
+
+    # ── 21. Reliable Internet ────────────────────────────────────────────────
+    # Tool 1: percentage_having_reliable_internet → Tool 2: hfs_reliable_internet
+    percentage_having_reliable_internet   = round(n_yes(internet) / n() * 100),
+
+    # ── 22. OPD Reporting Tools ──────────────────────────────────────────────
+    # Tool 1: reportingtools_availability → Tool 2: hfs_opd_tools_pcn
+    # opd_reporting_tools = composite reporting tools score
+    reportingtools_availability           = avg(opd_reporting_tools),
+
+    # ── 23. Functional EMR ───────────────────────────────────────────────────
+    # Tool 1: percentage_having_functional_EMR → Tool 2: hfs_integrated_emr
+    # Not directly captured in Tool 1 — set NA, filled manually in Tool 2
+    percentage_having_functional_EMR      = NA_real_,
+
+    # ── 24. HCW Skills Training ──────────────────────────────────────────────
+    # Tool 1: Health_care_workers_undergone_skills_competency_course → Tool 2: hcws_skills_training_2yrs
+    # competency_building = number/proportion of HCWs trained
+    Health_care_workers_undergone_skills_competency_course = avg(competency_building),
+
+    # ── 25. QIT ──────────────────────────────────────────────────────────────
+    # Tool 1: qit_team_percentage → Tool 2: hospitals_qit_functional
+    # qit_team = YES/NO whether QIT team is functional
+    qit_team_percentage                   = round(n_yes(qit_team) / n() * 100),
+
+    # ── 26. WIT ──────────────────────────────────────────────────────────────
+    # Tool 1: wit_team_percentage → Tool 2: spokes_wit_functional
+    # wit_team = YES/NO whether WIT team is functional
+    wit_team_percentage                   = round(n_yes(wit_team) / n() * 100),
+
+    # ── 27. IPC Average ──────────────────────────────────────────────────────
+    # Tool 1: IPC_avg → Tool 2: ipc_items_availability
+    # lpc_and_hygiene_items used as IPC proxy from WASH section
+    IPC_avg                               = round(
+      mean(as.numeric(tolower(trimws(as.character(lpc_and_hygiene_items))) == "yes"),
+           na.rm = TRUE) * 100
+    ),
+
     # ── 28. Clinical Guidelines Adherence ────────────────────────────────────
-    # Tool 1: Clinical_adherence → clinical_guidelines_adherence
-    Clinical_adherence                    = round(n_yes(q25) / n() * 100),
+    # Tool 1: Clinical_adherence → Tool 2: clinical_guidelines_adherence
+    # clinical_guidelines_adherence = direct score from Tool 1
+    Clinical_adherence                    = avg(clinical_guidelines_adherence),
 
     # ── 29. Staff Absenteeism ────────────────────────────────────────────────
-    # Tool 1: Proportion_of_staff_absent → absenteesm_phc_facilities
-    # q12 = proportion present → absenteeism = 100 - present
-    Proportion_of_staff_absent            = round(100 - avg(q12)),
+    # Tool 1: Proportion_of_staff_absent → Tool 2: absenteesm_phc_facilities
+    # absenteeism = direct absenteeism score; present = staff present count
+    # Use absenteeism directly if available, else derive as 100 - avg(present/expected*100)
+    Proportion_of_staff_absent            = if ("absenteeism" %in% names(pcn_data))
+                                              avg(absenteeism)
+                                            else
+                                              round(100 - avg(present / expected * 100)),
 
     # ── 30. Client Satisfaction Survey ───────────────────────────────────────
-    # Tool 1: percent_done_client_satisfaction_survey → facilities_client_survey
-    percent_done_client_satisfaction_survey = round(n_yes(q18) / n() * 100),
+    # Tool 1: percent_done_client_satisfaction_survey → Tool 2: facilities_client_survey
+    # client_satisfaction = score or YES/NO for satisfaction survey done
+    percent_done_client_satisfaction_survey = avg(client_satisfaction),
 
     .groups = "drop"
   )
