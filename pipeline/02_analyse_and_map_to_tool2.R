@@ -52,7 +52,7 @@ prop_selected <- function(x, max_n) {
 cat("Computing PCN-level aggregates...\n")
 
 pcn_results <- pcn_data %>%
-  group_by(county, subcounty, selected_pcn) %>%
+  group_by(county, subcounty) %>%
   summarise(
     total_facilities = n(),
 
