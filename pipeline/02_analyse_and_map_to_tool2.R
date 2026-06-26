@@ -191,17 +191,19 @@ else NA_real_,
     # Tool 1: qit_team_percentage → Tool 2: hospitals_qit_functional
     # improvement_teams = select_one with options including qit/wit
     # checking if "qit" appears in the improvement_teams value
-    qit_team_percentage                   = round(
-      sum(grepl("qit", tolower(as.character(improvement_teams)), fixed = TRUE), na.rm = TRUE) /
-        n() * 100
-    ),
+# improvement_teams is select_one — check qit_team and wit_team columns directly
+qit_team_percentage = if ("qit_team" %in% names(pcn_data))
+  round(n_yes(qit_team) / n() * 100)
+else if ("improvement_teams" %in% names(pcn_data))
+  round(sum(grepl("qit", tolower(as.character(improvement_teams))), na.rm = TRUE) / n() * 100)
+else NA_real_,
 
-    # ── 26. WIT ──────────────────────────────────────────────────────────────
-    # Tool 1: wit_team_percentage → Tool 2: spokes_wit_functional
-    wit_team_percentage                   = round(
-      sum(grepl("wit", tolower(as.character(improvement_teams)), fixed = TRUE), na.rm = TRUE) /
-        n() * 100
-    ),
+# ── 26. WIT ──────────────────────────────────────────────────────────────────
+wit_team_percentage = if ("wit_team" %in% names(pcn_data))
+  round(n_yes(wit_team) / n() * 100)
+else if ("improvement_teams" %in% names(pcn_data))
+  round(sum(grepl("wit", tolower(as.character(improvement_teams))), na.rm = TRUE) / n() * 100)
+else NA_real_,
 
     # ── 27. IPC Average ──────────────────────────────────────────────────────
     # Tool 1: IPC_avg → Tool 2: ipc_items_availability
