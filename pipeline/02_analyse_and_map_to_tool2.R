@@ -271,17 +271,15 @@ TOOL1_TO_TOOL2 <- c(
   "percent_done_client_satisfaction_survey"                                    = "facilities_client_survey"
 )
 
-# Apply renaming — only rename columns that exist
-# rename() needs format: new_name = old_name
-# TOOL1_TO_TOOL2 is old_name = new_name, so we need to flip it
-rename_vec <- TOOL1_TO_TOOL2[names(TOOL1_TO_TOOL2) %in% names(pcn_results)]
-# Flip: names become values and values become names
-rename_vec_flipped <- setNames(names(rename_vec), rename_vec)
-# Only keep targets that don't already exist (avoid duplicate column errors)
-rename_vec_flipped <- rename_vec_flipped[!rename_vec_flipped %in% names(pcn_results) | 
-                                          names(rename_vec_flipped) == rename_vec_flipped]
-pcn_tool2_ready <- pcn_results %>%
-  rename(any_of(rename_vec_flipped))
+# Rename Tool 1 columns → Tool 2 field names using a safe loop
+# (avoids tidyselect/splice issues with rename())
+pcn_tool2_ready <- pcn_results
+for (old_name in names(TOOL1_TO_TOOL2)) {
+  new_name <- TOOL1_TO_TOOL2[[old_name]]
+  if (old_name %in% names(pcn_tool2_ready) && !new_name %in% names(pcn_tool2_ready)) {
+    names(pcn_tool2_ready)[names(pcn_tool2_ready) == old_name] <- new_name
+  }
+}
 
 # Clamp all percentage columns to 0–100
 pcn_tool2_ready <- pcn_tool2_ready %>%
