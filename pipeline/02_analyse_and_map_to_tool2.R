@@ -16,6 +16,21 @@ library(stringr)
 
 cat("Reading facility data...\n")
 pcn_data <- read_csv("data/consolidated_facility_data.csv", show_col_types = FALSE)
+# Normalise column names — map known variants to expected names
+col_aliases <- c(
+  "tracer_stock_out_nonpharma" = "tracer_stock_out_nonpharma",
+  "tracer_stockout_nonpharma"  = "tracer_stock_out_nonpharma",
+  "stockout_nonpharma"         = "tracer_stock_out_nonpharma",
+  "tracer_nphe"                = "tracer_nphe",
+  "tracer_nophe"               = "tracer_nphe",
+  "non_pharma"                 = "tracer_nphe"
+)
+for (alias in names(col_aliases)) {
+  target <- col_aliases[[alias]]
+  if (alias %in% names(pcn_data) && !target %in% names(pcn_data)) {
+    pcn_data <- pcn_data %>% rename(!!target := !!alias)
+  }
+}
 cat(sprintf("  %d facility rows, %d counties\n",
             nrow(pcn_data), n_distinct(pcn_data$county, na.rm = TRUE)))
 
