@@ -123,7 +123,10 @@ pcn_results <- pcn_data %>%
     # ── 13. Clients Paying Cash ──────────────────────────────────────────────
     # Tool 1: Proportions_paid_through_cash → Tool 2: clients_access_cash
     # paid_cash_prop = calculated proportion paying cash
-    Proportions_paid_through_cash         = avg(paid_cash_prop),
+  Proportions_paid_through_cash = if ("paid_cash" %in% names(pcn_data))
+  round(sum(as.numeric(paid_cash), na.rm = TRUE) /
+        sum(as.numeric(total_attended), na.rm = TRUE) * 100, 1)
+else NA_real_,
 
     # ── 14. FIF Rollback ─────────────────────────────────────────────────────
     # Tool 1: Proportion_of_FIF_collected_rolled_back_to_the_facilities_within_PCN
