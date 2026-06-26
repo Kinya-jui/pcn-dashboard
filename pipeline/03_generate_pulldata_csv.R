@@ -111,7 +111,9 @@ pulldata_csv <- pcn_data %>%
   # Round all numerics to 1 decimal place
   mutate(across(where(is.numeric), ~ round(.x, 1))) %>%
   # Put key column first
-  select(pcn_key, pcn_label, county_key, subcounty_key, county, subcounty, severything())
+  # TO:
+select(any_of(c("pcn_key", "pcn_label", "county_key", "subcounty_key", 
+                 "county", "subcounty")), everything())
 
 cat(sprintf("  Built lookup table: %d PCNs × %d fields\n",
             nrow(pulldata_csv), length(AUTOFILL_FIELDS)))
