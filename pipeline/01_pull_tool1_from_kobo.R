@@ -55,16 +55,20 @@ names(raw_data) <- gsub("^[^/]+/", "", names(raw_data))
 # The analysis script expects: county, subcounty, q1, q3, q4, q5, q6, q8, q8_a,
 # q9_a..q9_e, q11, q12, q13_a..q13_c, q14_a, q15, q16, q17, q18..q42_11
 # These should already match if your Tool 1 question names match the analysis script columns.
+# Fix duplicate column names by making them unique
+names(raw_data) <- make.unique(names(raw_data), sep = "_")
 
+# Flatten any nested list/matrix columns to simple strings
+for (col in names(raw_data)) {
+  if (is.list(raw_data[[col]])) {
+    raw_data[[col]] <- sapply(raw_data[[col]], function(x) {
+      if (is.null(x) || length(x) == 0) NA_character_
+      else paste(unlist(x), collapse = "; ")
+    })
+  }
+}
 # Save to disk for the analysis script to consume
 output_path <- "data/consolidated_facility_data.csv"
 dir.create("data", showWarnings = FALSE)
-# Flatten any nested list/matrix columns to JSON strings
-raw_data <- raw_data |>
-  mutate(across(where(is.list), ~ sapply(., function(x) {
-    if (is.null(x)) NA_character_
-    else paste(unlist(x), collapse = "; ")
-  })))
-
 write_csv(raw_data, output_path)
 cat(sprintf("  Saved to %s\n", output_path))
