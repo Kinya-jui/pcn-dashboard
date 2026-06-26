@@ -14,6 +14,10 @@ library(stringr)
 
 cat("Reading facility data...\n")
 pcn_data <- read_csv("data/consolidated_facility_data.csv", show_col_types = FALSE)
+cat("=== ALL COLUMN NAMES ===\n")
+cat(paste(seq_along(names(pcn_data)), names(pcn_data), sep = ": ", collapse = "\n"), "\n")
+stop("DEBUG STOP - check column names above")
+
 cat(sprintf("  %d facility rows, %d counties\n",
             nrow(pcn_data), n_distinct(pcn_data$county, na.rm = TRUE)))
 
