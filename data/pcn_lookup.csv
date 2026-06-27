@@ -1,0 +1,14 @@
+pcn_key,county_key,subcounty_key,county,subcounty,no_hfs_support,hfs_empaneled_sha,claims_reimbursed_hfs,clients_access_shif,clients_access_cash,fif_collected_rollback,people_waived_userfees,userfees_total_waived,facilities_22pharma_avail,facilities_23nonpharma_avail,blood_availability_hospitals,stockout_22pharma_7days_month,stockout_23nonpharma_7days_months,hospitals_comp_lab_services,spokes_basic_lab_services,allbasic_tracer_equipments,hfs_accessible_road,hfs_wash_facilities,hfs_tracer_infra_keph,hfs_reliable_power,hfs_reliable_internet,hfs_opd_tools_pcn,hfs_integrated_emr,hcws_skills_training_2yrs,hospitals_qit_functional,spokes_wit_functional,ipc_items_availability,clinical_guidelines_adherence,absenteesm_phc_facilities,facilities_client_survey
+garissa,garissa,garissa,garissa,garissa,5,60,12.6,23.2,0,1.8,100,100,70.4,84.3,0,16.5,10.4,100,100,92.3,100,100,100,100,60,100,40,90,100,100,60,20,0,100
+lagdera,garissa,lagdera,garissa,lagdera,4,100,38.2,10.2,0,25,0,0,76.1,83.7,0,20.7,12,100,100,88.5,100,100,100,100,25,100,0,100,25,25,50,15,0,25
+homabaytown,homabay,homabaytown,homabay,homabaytown,2,100,73,91,0,20,0,0,67.4,91.3,0,8.7,8.7,100,100,69.2,0,100,100,100,100,100,0,55.5,100,100,50,0,94,100
+kaiti,makueni,kaiti,makueni,kaiti,5,100,81.2,3.8,0,20,100,100,73.9,82.6,0,36.5,23.5,60,60,80,0,100,100,80,40,100,0,73.8,40,20,52,16,100,20
+mbooni,makueni,mbooni,makueni,mbooni,7,50,81.5,37.8,0,39,30,100,57.1,58.7,0,27.7,29.3,88,88,67.3,12,94,100,75,50,100,12,84.1,50,50,42.5,10,91.1,38
+kuriaeast,migori,kuriaeast,migori,kuriaeast,0,0,0,0,0,0,0,0,56.9,59.7,0,39.5,39.1,82,82,65.7,0,82,100,0,0,100,0,0,55,55,47.3,0,0,0
+sunawest,migori,sunawest,migori,sunawest,0,0,0,0,0,0,0,0,55.7,66.1,0,42.6,36.1,100,100,56.9,0,95,100,0,0,100,0,0,80,80,46,0,0,0
+dagorettinorth,nairobi,dagorettinorth,nairobi,dagorettinorth,7,14,0,0,0,0,0,0,56.5,63.4,0,28.6,24.2,86,86,70.3,100,93,100,100,86,92.9,43,50,86,71,37.1,34.3,0,86
+embakasieast,nairobi,embakasieast,nairobi,embakasieast,7,29,82,0,0,50,0,0,81.4,77.6,0,31.1,18.6,100,100,97.8,100,93,100,86,100,100,57,94.1,100,100,57.1,100,0,100
+mukurweini,nyeri,mukurweini,nyeri,mukurweini,6,50,29.7,42.3,0,29,83,100,63,71.7,0,40.6,34.1,100,100,85.9,0,100,100,50,67,100,0,74.5,33,67,56.7,10,0,100
+nyerisouth,nyeri,nyerisouth,nyeri,nyerisouth,6,50,100,27.7,0,81.7,0,0,47.8,59.4,0,19.6,15.2,100,100,79.5,0,100,100,17,100,100,0,53.8,100,100,43.3,13.3,100,100
+centralpokot,westpokot,centralpokot,westpokot,centralpokot,6,0,0,0,0,0,0,0,50,68.1,0,44.9,31.9,67,67,73.1,67,83,100,67,33,100,0,36.7,17,0,43.3,36.7,0,50
+kacheliba,westpokot,kacheliba,westpokot,kacheliba,8,0,0,0,0,0,0,0,59.2,69,0,36.4,30.4,75,75,71.2,62,94,100,62,38,100,12,33.6,12,25,30,32.5,0,25
