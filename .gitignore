@@ -1,6 +1,6 @@
 .Renviron
 .RData
 .Rhistory
-*.csv
+#*.csv
 rsconnect/
 New Text Document.txt
