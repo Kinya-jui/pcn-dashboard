@@ -10,7 +10,7 @@ library(readr)
 
 KOBO_TOKEN     <- Sys.getenv("KOBO_TOKEN")
 KOBO_TOOL2_UID <- Sys.getenv("KOBO_TOOL2_UID")
-KOBO_BASE      <- "https://kf.kobotoolbox.org/api/v2/assets"
+KOBO_BASE      <- "https://eu.kobotoolbox.org/api/v2/assets"
 LOOKUP_FILE    <- "data/pcn_lookup.csv"
 LOOKUP_NAME    <- "pcn_lookup.csv"   # must match exactly what's in pulldata() formula
 
