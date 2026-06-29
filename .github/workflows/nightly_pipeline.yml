@@ -53,8 +53,12 @@ jobs:
       - name: Step 3 - Generate pcn_lookup.csv for pulldata
         run: Rscript pipeline/03_generate_pulldata_csv.R
 
-      - name: Step 4 - Upload pcn_lookup.csv to KoboToolbox Tool 2
-        run: Rscript pipeline/04_upload_pulldata_to_kobo.R
+      - name: Step 4 - Write data to Supabase
+        run: Rscript pipeline/04_write_to_supabase.R
+        env:
+           SUPABASE_HOST: ${{ secrets.SUPABASE_HOST }}
+           SUPABASE_USER: ${{ secrets.SUPABASE_USER }}
+           SUPABASE_PASS: ${{ secrets.SUPABASE_PASS }}
 
       - name: Commit pcn_lookup.csv to repo
         run: |
