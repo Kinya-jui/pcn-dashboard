@@ -37,7 +37,7 @@ jobs:
       - name: Install R packages
         run: |
           Rscript -e "
-            pkgs <- c('httr2','jsonlite','dplyr','readr','tidyr','stringr','purrr','curl')
+            pkgs <- c('httr2','jsonlite','dplyr','readr','tidyr','stringr','purrr','curl', 'DBI', 'RPostgres')
             missing <- pkgs[!pkgs %in% installed.packages()[,'Package']]
             if (length(missing) > 0) install.packages(missing, repos='https://cloud.r-project.org')
           "
