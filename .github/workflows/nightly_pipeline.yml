@@ -60,6 +60,16 @@ jobs:
            SUPABASE_USER: ${{ secrets.SUPABASE_USER }}
            SUPABASE_PASS: ${{ secrets.SUPABASE_PASS }}
 
+      - name: Step 5 - Pull Tool 2 submissions to Supabase
+        run: Rscript pipeline/00_pull_tool2_from_kobo.R
+        env:
+          KOBO_TOKEN:    ${{ secrets.KOBO_TOKEN }}
+          KOBO_TOOL2_UID: ${{ secrets.KOBO_TOOL2_UID }}
+          SUPABASE_HOST: ${{ secrets.SUPABASE_HOST }}
+          SUPABASE_USER: ${{ secrets.SUPABASE_USER }}
+          SUPABASE_PASS: ${{ secrets.SUPABASE_PASS }}
+           
+
       - name: Commit pcn_lookup.csv to repo
         run: |
           git config user.name  "github-actions[bot]"
