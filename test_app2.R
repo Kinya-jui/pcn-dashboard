@@ -3,7 +3,6 @@
 # Author: Quintine | Version: Stable (Manual Tabs)
 # ============================================================
 
-
 # ============================================================
 # 01. LOAD LIBRARIES
 # ============================================================
@@ -30,6 +29,9 @@ library(ggrepel)
 library(shinydashboard)
 library(httr2)
 library(jsonlite)
+library(DBI)
+library(RSQLite)
+
 
 # ============================================================
 # 02. GLOBAL HELPER FUNCTIONS
@@ -108,112 +110,96 @@ lakes_shp_path  <- "kenya_shapefiles/KEN_Lakes.shp"
 # ============================================================
 # 04. KOBO API CREDENTIALS
 # ============================================================
-KOBO_TOKEN    <- Sys.getenv("6a74367c364625414eeb8a4f2222c7ca793c97d0")     # store in .Renviron, NOT hardcoded
-KOBO_PCN_UID  <- Sys.getenv("aWoWkvQC6WVnzdNyTCXQ4n")   # Asset UID for PCN/county tool (Tool 2)
-KOBO_BASE     <- "https://kf.kobotoolbox.org/api/v2/assets"
+KOBO_TOKEN    <- Sys.getenv("KOBO_TOKEN")
+KOBO_PCN_UID  <- Sys.getenv("KOBO_TOOL2_UID")  # Asset UID for PCN/county tool (Tool 2)
+KOBO_BASE     <- "https://eu.kobotoolbox.org/api/v2/assets"
 
 
-# Find where your app.R is
-getwd()
-
-# Create the .Renviron file right there
-writeLines(
-  c(
-    "KOBO_TOKEN=6a74367c364625414eeb8a4f2222c7ca793c97d0",
-    "KOBO_PCN_UID=aWoWkvQC6WVnzdNyTCXQ4n"
-  ),
-  con = file.path(getwd(), ".Renviron")
-)
-
-
-Sys.getenv("KOBO_TOKEN")    # should show your token
-Sys.getenv("KOBO_PCN_UID")  # should show your UID
 # ============================================================
 # 05. FETCH FUNCTION (replaces read_csv)
 # ============================================================
 fetch_kobo <- function(asset_uid) {
-  req <- httr2::request(KOBO_BASE) |>
-    httr2::req_url_path_append(asset_uid, "data") |>
-    httr2::req_url_query(format = "json") |>
-    httr2::req_headers(Authorization = paste("Token", KOBO_TOKEN))
   
-  resp <- httr2::req_perform(req)
-  df   <- httr2::resp_body_json(resp, simplifyVector = TRUE)$results
-  as.data.frame(df)
+  # Guard: if credentials are missing, return empty df silently
+  if (!nzchar(KOBO_TOKEN) || !nzchar(asset_uid)) {
+    message("[fetch_kobo] Missing token or UID — returning empty data frame")
+    return(data.frame())
+  }
+  
+  tryCatch({
+    req <- httr2::request(KOBO_BASE) |>
+      httr2::req_url_path_append(asset_uid, "data") |>
+      httr2::req_url_query(format = "json") |>
+      httr2::req_headers(Authorization = paste("Token", KOBO_TOKEN))
+    
+    resp <- httr2::req_perform(req)
+    df   <- httr2::resp_body_json(resp, simplifyVector = TRUE)$results
+    as.data.frame(df)
+    
+  }, error = function(e) {
+    message("[fetch_kobo] API error: ", conditionMessage(e))
+    return(data.frame())   # ← return empty df instead of crashing
+  })
 }
 
-# ============================================================
-# 06. REACTIVE DATA (replaces static read_csv)
-#     Polls KoboToolbox every 5 minutes
-# ============================================================
-# These go inside server(), replacing the static data_pcn / data_county objects
 
-kobo_timer <- reactiveTimer(300000)   # 5 minutes = 300,000 ms
-
-data_pcn_live <- reactive({
-  kobo_timer()
-  df <- fetch_kobo(KOBO_PCN_UID)
-  # --- same cleaning as your original section 05 ---
-  df <- df %>%
+# ============================================================
+# 05b. LOAD PCN ESTABLISHMENT DATA FROM CSV
+# ============================================================
+# Multi-path fallback — works both locally and on ShinyApps.io
+pcn_csv_path <- if (file.exists("pcn_lvl_data.csv")) {
+  "pcn_lvl_data.csv"
+} else if (file.exists("data/pcn_lvl_data.csv")) {
+  "data/pcn_lvl_data.csv"
+} else {
+  # Local dev fallback — only used on Quintine's machine
+  "C:/Users/Quintine/OneDrive/Desktop/M&E MoH Admin/PHC M&E/PCN Functionality/Digitalization/Dashboard development/pcn_me/pcn_lvl_data.csv"
+}
+pcn_csv_data <- if (file.exists(pcn_csv_path)) {
+  readr::read_csv(pcn_csv_path, show_col_types = FALSE) %>%
     filter(!is.na(County), County != "", !is.na(Subcounty), !is.na(PCN)) %>%
     mutate(
-      County         = as.character(County),
-      Subcounty      = as.character(Subcounty),
-      PCN            = as.character(PCN),
-      County_raw     = County,
-      County_clean   = normalize_name(County),
-      Subcounty_raw  = Subcounty,
-      Subcounty_clean= normalize_name(Subcounty)
+      County          = as.character(County),
+      Subcounty       = as.character(Subcounty),
+      PCN             = as.character(PCN),
+      County_raw      = County,
+      County_clean    = normalize_name(County),
+      Subcounty_raw   = Subcounty,
+      Subcounty_clean = normalize_name(Subcounty),
+      supporting_partner = if ("supporting_partner" %in% names(.))
+        as.character(supporting_partner) else NA_character_,
+      pcn_location    = if ("pcn_location" %in% names(.))
+        as.character(pcn_location) else NA_character_
     )
-  names(df) <- trimws(gsub("\\s+", " ", names(df)))
-  df
-})
+} else {
+  message("[pcn_csv_data] CSV not found at: ", pcn_csv_path)
+  data.frame(County=character(0), Subcounty=character(0), PCN=character(0),
+             establishment_status=character(0), supporting_partner=character(0),
+             pcn_location=character(0))
+}
 
-# Normalize column names
-names(data_pcn) <- gsub("\\s+", " ", names(data_pcn))
-names(data_pcn) <- trimws(names(data_pcn))
-
-# Ensure key fields are character type
-data_pcn$County    <- as.character(data_pcn$County)
-data_pcn$Subcounty <- as.character(data_pcn$Subcounty)
-data_pcn$PCN       <- as.character(data_pcn$PCN)
-
-# Add normalized name columns for fuzzy joining
-data_pcn <- data_pcn %>%
-  mutate(
-    County_raw      = County,
-    County_clean    = normalize_name(County),
-    Subcounty_raw   = Subcounty,
-    Subcounty_clean = normalize_name(Subcounty)
-  )
-
-# Extract numeric indicator column names
-indicator_cols <- names(data_pcn)[sapply(data_pcn, is.numeric)]
-
-
-# ============================================================
-# 06. LOAD & CLEAN COUNTY-LEVEL DATA
-# ============================================================
-data_county <- read_csv(county_csv_path, show_col_types = FALSE) %>%
-  mutate(
-    County       = trimws(County),
-    County_clean = normalize_name(County)
-  )
-
-# Safe encoding fix for column names (handles NBSP and special chars)
-names(data_county) <- names(data_county) %>%
-  stringi::stri_enc_toutf8() %>%
-  stringi::stri_replace_all_fixed("\u00A0", " ") %>%
-  stringi::stri_replace_all_regex("\\s+", " ") %>%
-  stringi::stri_trim_both() %>%
-  stringi::stri_trans_general("Latin-ASCII") %>%
-  stringr::str_replace_all("[.]", "") %>%
-  stringr::str_trim()
-
-# Extract numeric indicator column names
-county_indicator_cols <- names(data_county)[sapply(data_county, is.numeric)]
-
-
+load_pcn_csv <- function() {
+  if (!file.exists(pcn_csv_path)) {
+    return(data.frame(County=character(0), Subcounty=character(0), PCN=character(0),
+                      establishment_status=character(0), supporting_partner=character(0),
+                      pcn_location=character(0)))
+  }
+  readr::read_csv(pcn_csv_path, show_col_types = FALSE) %>%
+    filter(!is.na(County), County != "", !is.na(Subcounty), !is.na(PCN)) %>%
+    mutate(
+      County          = as.character(County),
+      Subcounty       = as.character(Subcounty),
+      PCN             = as.character(PCN),
+      County_raw      = County,
+      County_clean    = normalize_name(County),
+      Subcounty_raw   = Subcounty,
+      Subcounty_clean = normalize_name(Subcounty),
+      supporting_partner = if ("supporting_partner" %in% names(.))
+        as.character(supporting_partner) else NA_character_,
+      pcn_location    = if ("pcn_location" %in% names(.))
+        as.character(pcn_location) else NA_character_
+    )
+}
 # ============================================================
 # 07. LOAD SHAPEFILES & BUILD SPATIAL OBJECTS
 # ============================================================
@@ -270,33 +256,44 @@ county_centroids <- suppressWarnings(st_centroid(county_shp))
 cent_coords <- data.frame(st_coordinates(county_centroids), County = county_shp$County)
 
 
+
 # ============================================================
-# 08. PCN GEO POINTS (for map dots)
+# 08. PCN GEO POINTS (built from CSV pcn_location column)
 # ============================================================
-pcn_points <- data_pcn %>%
-  select(PCN, County, Subcounty, pcn_location) %>%
-  filter(!is.na(pcn_location), pcn_location != "") %>%
-  mutate(
-    coord_clean = stringr::str_replace_all(pcn_location, "\\s+", ""),
-    lon         = as.numeric(stringr::str_extract(coord_clean, "^[^,]+")),
-    lat         = as.numeric(stringr::str_extract(coord_clean, "(?<=,).*")),
-    # Auto-fix reversed lat/lon
-    lon_fixed   = ifelse(abs(lon) > 90, lon, lat),
-    lat_fixed   = ifelse(abs(lon) > 90, lat, lon)
-  ) %>%
-  filter(!is.na(lat_fixed), !is.na(lon_fixed)) %>%
-  st_as_sf(coords = c("lon_fixed", "lat_fixed"), crs = 4326, remove = FALSE) %>%
-  mutate(
-    County_clean    = normalize_name(County),
-    Subcounty_clean = normalize_name(Subcounty)
-  )
+pcn_points <- tryCatch({
+  if (nrow(pcn_csv_data) > 0 && "pcn_location" %in% names(pcn_csv_data)) {
+    pcn_csv_data %>%
+      select(PCN, County, Subcounty, pcn_location) %>%
+      filter(!is.na(pcn_location), pcn_location != "") %>%
+      mutate(
+        coord_clean = stringr::str_replace_all(pcn_location, "\\s+", ""),
+        lon         = as.numeric(stringr::str_extract(coord_clean, "^[^,]+")),
+        lat         = as.numeric(stringr::str_extract(coord_clean, "(?<=,).*")),
+        # Auto-fix reversed lat/lon (Kenya lat is negative, lon is ~34-42)
+        lon_fixed   = ifelse(abs(lon) > 90, lon, lat),
+        lat_fixed   = ifelse(abs(lon) > 90, lat, lon)
+      ) %>%
+      filter(!is.na(lat_fixed), !is.na(lon_fixed)) %>%
+      st_as_sf(coords = c("lon_fixed", "lat_fixed"), crs = 4326, remove = FALSE) %>%
+      mutate(
+        County_clean    = normalize_name(County),
+        Subcounty_clean = normalize_name(Subcounty)
+      )
+  } else {
+    message("[pcn_points] No pcn_location data in CSV — points disabled")
+    NULL
+  }
+}, error = function(e) {
+  message("[pcn_points] Error building points: ", e$message)
+  NULL
+})
 
 
 # ============================================================
 # 09. PCN INDICATOR GROUPS (14 THEMATIC TABS)
 # ============================================================
 pcn_indicators <- list(
-  "Overview" = indicator_cols,
+  "Overview" = character(0),
   
   "Governance" = c(
     "Proportion of functional Community Health Committees in the PCN",
@@ -400,18 +397,13 @@ pcn_indicators <- list(
   )
 )
 
-# Fuzzy-match PCN indicator names to actual column names
-pcn_indicators <- lapply(pcn_indicators, function(vec) {
-  matched <- sapply(vec, match_to_closest, choices = names(data_pcn))
-  ifelse(is.na(matched), vec, matched)
-})
 
 
 # ============================================================
 # 10. COUNTY INDICATOR GROUPS (10 THEMATIC TABS)
 # ============================================================
 county_indicators <- list(
-  "Overview" = county_indicator_cols,
+  "Overview" = character(0),
   
   "Governance & Leadership for PCNs" = c(
     "Proportion of functional PHC advisory Committees in the Place",
@@ -473,11 +465,7 @@ county_indicators <- list(
   "Overall Performance" = c("Total County Score (Total Weighted Score)")
 )
 
-# Fuzzy-match county indicator names to actual column names
-county_indicators <- lapply(county_indicators, function(vec) {
-  matched <- sapply(vec, match_to_closest, choices = names(data_county))
-  ifelse(is.na(matched), vec, matched)
-})
+
 
 
 # ============================================================
@@ -2119,6 +2107,28 @@ Shiny.addCustomMessageHandler('updateDummyBtn', function(msg) {
       bs4TabItem(
         tabName = "pcn_establishment",
         
+        fluidRow(
+          column(12,
+                 div(style = "display:flex; justify-content:flex-end; padding:4px 8px 8px 0;",
+                     actionButton("refresh_csv", "↺  Refresh Data",
+                                  icon  = icon("sync"),
+                                  style = "background:rgba(5,15,30,0.85);
+                 color:#00eaff;
+                 border-top:1px solid rgba(0,234,255,0.35);
+                 border-bottom:1px solid rgba(0,234,255,0.35);
+                 border-left:1px solid rgba(0,234,255,0.35);
+                 border-right:1px solid rgba(0,234,255,0.35);
+                 border-radius:8px;
+                 font-weight:900;
+                 font-size:13px;
+                 letter-spacing:2px;
+                 padding:10px 20px;
+                 box-shadow:0 -1px 8px rgba(0,234,255,0.20), 0 1px 8px rgba(0,234,255,0.20);
+                 text-shadow:0 0 8px rgba(0,234,255,0.6);")
+                 )
+          )
+        ),
+        
         # County summary boxes (2 rows × 4 columns)
         tags$div(
           style = "text-align:center; margin:16px 0 8px 0; padding:10px; border-top:1px solid rgba(0,234,255,0.35); border-bottom:1px solid rgba(0,234,255,0.35); border-left:none; border-right:none; background:rgba(5,15,30,0.85); box-shadow:0 -1px 8px rgba(0,234,255,0.20), 0 1px 8px rgba(0,234,255,0.20); border-radius:8px;",
@@ -2170,7 +2180,7 @@ Shiny.addCustomMessageHandler('updateDummyBtn', function(msg) {
                    solidHeader = TRUE, elevation = 3, width = 12,
                    div(style = "display:flex; justify-content:flex-end; padding:5px;",
                        selectInput("subcounty_filter", label = NULL,
-                                   choices = c("All", sort(unique(data_pcn$County))),
+                                   choices = c("All", sort(unique(pcn_csv_data$County))), 
                                    selected = "All", width = "160px")
                    ),
                    plotlyOutput("subcounty_perf_chart", height = "550px", width = "100%")
@@ -2210,7 +2220,7 @@ Shiny.addCustomMessageHandler('updateDummyBtn', function(msg) {
                    solidHeader = TRUE, elevation = 3, width = 12,
                    div(style = "display:flex; justify-content:flex-end; padding:5px;",
                        selectInput("pcn_filter", label = NULL,
-                                   choices = c("All", sort(unique(data_pcn$County))),
+                                   choices = c("All", sort(unique(pcn_csv_data$County))), 
                                    selected = "All", width = "160px")
                    ),
                    plotlyOutput("pcn_status_chart", height = "550px", width = "100%")
@@ -2233,7 +2243,7 @@ Shiny.addCustomMessageHandler('updateDummyBtn', function(msg) {
                             selectInput(
                               "partner_county_filter",
                               label = "County:",
-                              choices  = c("All", sort(unique(data_pcn$County))),
+                              choices = c("All", sort(unique(pcn_csv_data$County))),
                               selected = "All",
                               width    = "100%"
                             )
@@ -2242,7 +2252,7 @@ Shiny.addCustomMessageHandler('updateDummyBtn', function(msg) {
                             selectizeInput(
                               "partner_subcounty_filter",
                               label    = "Subcounty:",
-                              choices  = "All",
+                              choices  = c("All"),
                               selected = "All",
                               width    = "100%"
                             )
@@ -2547,7 +2557,393 @@ body.intro-active h1,
   )
 )
 
+# ============================================================
+# PASTE THIS ABOVE YOUR SERVER FUNCTION IN app.R
+# ============================================================
 
+# Full rename map: whatever Tool 2 returns → dashboard display names
+# Covers both the raw field names AND the calc_ prefixed versions
+KOBO_TO_DASHBOARD <- c(
+  # ── Identity columns ──────────────────────────────────────────────────────
+  "note__counties"                                                    = "County",
+  "county_tool__county_governance__counties"                          = "County",
+  "county"                                                            = "County",
+  "counties"                                                          = "County",
+  "note__subcounty"                                                   = "Subcounty",
+  "subcounty"                                                         = "Subcounty",
+  "facility"                                                          = "PCN",
+  "pcn_name"                                                          = "PCN",
+  
+  # ── PCN TOOL: Governance ──────────────────────────────────────────────────
+  "pcn_tool__governance__functional_phc_chc"
+  = "Proportion of functional Community Health Committees in the PCN",
+  "pcn_tool__governance__proportion_hfs_support_supervision"
+  = "Proportion of Health facilities that have received supportive supervision in the PCN",
+  "pcn_tool__governance__functional_phc_committee"
+  = "Functional PCN Management Committee",
+  "pcn_tool__governance__disp_functional_mdt"
+  = "Functionality of MDTs",
+  "pcn_tool__governance__pcn_governance_score"
+  = "Governance Score",
+  "pcn_tool__governance__pcn_governance_weight"
+  = "Governance Weighted Score",
+  
+  # ── PCN TOOL: Population Health Needs ────────────────────────────────────
+  "pcn_tool__population_health_needs__population_profiling_count"
+  = "Number of population profiling assessments conducted",
+  "pcn_tool__population_health_needs__proportion_pop_health_needs"
+  = "Proportion of population health needs that have been addressed",
+  "pcn_tool__population_health_needs__wellness_activities_pcn"
+  = "Number of wellness activities conducted within the PCN",
+  "pcn_tool__population_health_needs__population_health_needs_score"
+  = "Population Needs Score",
+  "pcn_tool__population_health_needs__population_health_needs_weight"
+  = "Population Needs Weighted Score",
+  
+  # ── PCN TOOL: Capacity Readiness — HPTs ──────────────────────────────────
+  "pcn_tool__capacity_readiness_hpts__facilities_22pharma_avail"
+  = "Proportion of facilities in the PCN that had all 22 tracer pharmaceuticals at assessment",
+  "pcn_tool__capacity_readiness_hpts__facilities_23nonpharma_avail"
+  = "Proportion with all 23 tracer non-pharmaceuticals",
+  "pcn_tool__capacity_readiness_hpts__blood_availability_hospitals"
+  = "Availability of whole blood components",
+  "pcn_tool__capacity_readiness_hpts__stockout_22pharma_7days_month"
+  = "Percentage of Health facilities with stock out on any of the 22 tracer pharmaceuticals for 7 consecutive days in a month",
+  "pcn_tool__capacity_readiness_hpts__stockout_23nonpharma_7days_months"
+  = "Percentage of Health facilities with stock out on any of the 22 tracer non-pharmaceuticals for 7 consecutive days in a month",
+  "pcn_tool__capacity_readiness_hpts__hospitals_comp_lab_services"
+  = "Proportion of hospitals with comprehensive lab services within the PCN",
+  "pcn_tool__capacity_readiness_hpts__spokes_basic_lab_services"
+  = "Proportion of spokes with basic lab services within the PCN",
+  
+  # ── PCN TOOL: Capacity Readiness — Equipment ─────────────────────────────
+  "pcn_tool__capacity_readiness_equipments__calc_allbasic_tracer_e"
+  = "Proportion of Facilities within the PCN with all basic  tracer equipment available and functional",
+  "pcn_tool__capacity_readiness_equipments__capacity_readiness_scor"
+  = "Capacity Readiness Score",
+  
+  # ── PCN TOOL: Health Care Financing ──────────────────────────────────────
+  "pcn_tool__healthcare_financing__proportion_clients_shif"
+  = "Proportion of clients using SHIF",
+  "pcn_tool__healthcare_financing__proportion_facilities_empaneled"
+  = "Proportion of facilities empaneled by SHA",
+  "pcn_tool__healthcare_financing__proportion_facilities_claims_rei"
+  = "Proportion submitting SHA claims",
+  "pcn_tool__healthcare_financing__proportion_fif_collected_rollbac"
+  = "Proportion of FIF collected rolled back to the facilities within PCN",
+  "pcn_tool__healthcare_financing__people_waived_userfees"
+  = "Number of people waived for user fees in Hospitals within the PCN",
+  "pcn_tool__healthcare_financing__userfees_total_waived"
+  = "Total amount of user fees  waived in Health care Facilities within the PCN",
+  "pcn_tool__healthcare_financing__health_financing_score"
+  = "Healthcare Financing Score",
+  "pcn_tool__healthcare_financing__health_financing_weight"
+  = "Healthcare Financing Weighted Score",
+  
+  # ── PCN TOOL: Health Infrastructure ──────────────────────────────────────
+  "pcn_tool__infrastructure__calc_hfs_accessible_road"
+  = "Proportion of health facilities with accessible road network",
+  "pcn_tool__infrastructure__calc_hfs_wash_facilities"
+  = "Proportion of  facilities with the appropriate WASH facilities",
+  "pcn_tool__infrastructure__calc_hfs_tracer_infra_keph"
+  = "Proportion of  facilities with the tracer list of infrastructure as per KEPH standards",
+  "pcn_tool__infrastructure__calc_hfs_reliable_power"
+  = "Proportion of facilties with a reliable power source",
+  "pcn_tool__infrastructure__calc_pcn_ambulance"
+  = "PCN access to adequate ambulance services",
+  "pcn_tool__infrastructure__calc_ambulance_request"
+  = "Ambulance Request Score",
+  "pcn_tool__infrastructure__health_infrastructure_score"
+  = "Health Infrastructure Score",
+  "pcn_tool__infrastructure__health_infrastructure_weight"
+  = "Health infrastructure Weighted Score",
+  
+  # ── PCN TOOL: HMIS / Digital Health ──────────────────────────────────────
+  "pcn_tool__hmis__calc_hfs_reliable_internet"
+  = "Proprtion of facilties with  reliable internet connection",
+  "pcn_tool__hmis__calc_hfs_opd_tools_pcn"
+  = "Proportion of facilities in the PCN with the key OPD reporting tools (6)",
+  "pcn_tool__hmis__calc_performance_review_meetings"
+  = "No of performance and data quality review meetings held quarterly within the PCN",
+  "pcn_tool__hmis__calc_hfs_integrated_emr"
+  = "Proportion of facilities in a PCN with an integrated functional EMR",
+  "pcn_tool__hmis__calc_chus_reporting_monthly"
+  = "Proportion of CHUs within the PCN reporting monthly",
+  "pcn_tool__hmis__hmis_score"
+  = "HMIS Score",
+  "pcn_tool__hmis__hmis_score_weight"
+  = "HMIS Weighted Score",
+  
+  # ── PCN TOOL: HRH ────────────────────────────────────────────────────────
+  "pcn_tool__hrh__calc_hrh_density"
+  = "Core HRH density",
+  "pcn_tool__hrh__calc_doctor_pop_ratio"
+  = "Doctor to population ratio",
+  "pcn_tool__hrh__calc_clinical_officer_pop_ratio"
+  = "Clinical officer to  population ratio",
+  "pcn_tool__hrh__calc_nurse_pop_ratio"
+  = "Nurse to population ratio",
+  "pcn_tool__hrh__calc_cha_cho_pop_ratio"
+  = "CHA/CHO  to population ratio",
+  "pcn_tool__hrh__calc_chps_trained_basic"
+  = "Proportion of CHPs trained on basic modules",
+  "pcn_tool__hrh__calc_hcws_sensitized_phc_pcn"
+  = "Health care workers sensitized on PHC /PCN ",
+  "pcn_tool__hrh__calc_county_skill_mechanism"
+  = "Skills improvement mechanism",
+  "pcn_tool__hrh__calc_hcws_skills_training_2yrs"
+  = "Proportion of health workers who have undergone a skills/ competency buliding course within the last 2 years",
+  "pcn_tool__hrh__hrh_score"
+  = "HRH Score",
+  "pcn_tool__hrh__hrh_score_weight"
+  = "HRH Weighted Score",
+  
+  # ── PCN TOOL: Service Delivery ────────────────────────────────────────────
+  "pcn_tool__service_delivery_processes__calc_mdt_outreaches"
+  = "Number of outreaches conducted  by the MDT",
+  "pcn_tool__service_delivery_processes__calc_inreaches_pcn"
+  = "Number of in-reaches conducted within the PCN",
+  "pcn_tool__service_delivery_processes__service_delivery_score"
+  = "Service Delivery Score",
+  
+  # ── PCN TOOL: Quality of Care — Management Systems ───────────────────────
+  "pcn_tool__management_systems__calc_hosp_qits"
+  = "Proportion of hospitals with functional facility quality improvement teams (QIT)",
+  "pcn_tool__management_systems__calc_spokes_wit_functional"
+  = "Proportion of spokes with functional facility work improvement teams (WIT)",
+  "pcn_tool__management_systems__calc_ipc_items_availability"
+  = "Average availability of selected IPC items  *(items defined below)",
+  
+  # ── PCN TOOL: Quality of Care — PHC Core Systems ─────────────────────────
+  "pcn_tool__phc_core_systems__calc_clinical_guidelines_adherence"
+  = "Adherence to clinical guidelines for Primary health care facilities",
+  
+  # ── PCN TOOL: Quality of Care — Outcomes ─────────────────────────────────
+  "pcn_tool__qoc_outcomes__pcn_qoc_score"
+  = "QoC Outcomes Score",
+  "pcn_tool__qoc_outcomes__pcn_qoc_weight"
+  = "QoC Outcomes Weighted Score",
+  
+  # ── PCN TOOL: Social Accountability ──────────────────────────────────────
+  "pcn_tool__social_accountability__calc_mdt_engagements_community"
+  = "No. of MDT engagements with the community",
+  "pcn_tool__social_accountability__calc_facilities_functional_grms"
+  = "No. of health facilities with functional GRMs",
+  "pcn_tool__social_accountability__social_accountability_score"
+  = "Social Accountability Score",
+  "pcn_tool__social_accountability__social_accountability_weight"
+  = "Social Accountability Weighted Score",
+  
+  # ── PCN TOOL: Multisectoral / Innovations ────────────────────────────────
+  "pcn_tool__multi_sectoral_partnerships__proportion_multisectoral_"
+  = "Proportion of multi-sectoral actions implemented",
+  "pcn_tool__multi_sectoral_partnerships__calc_pcn_peer_learning_se"
+  = "Number of inter- PCN peer to peer learning sessions held",
+  "pcn_tool__multi_sectoral_partnerships__partnerships_score"
+  = "Multisectoral Partnerships and Coordination Score",
+  "pcn_tool__multi_sectoral_partnerships__innovations_learning__cal"
+  = "Number of PHC related innovations/ best practice implemented/adapted",
+  "pcn_tool__multi_sectoral_partnerships__innovations_learning__inn"
+  = "Innovations and Learning Score",
+  "pcn_tool__pcn_score"
+  = "Total PCN Score (Total Weighted Score)",
+  
+  # ── COUNTY TOOL: Governance ───────────────────────────────────────────────
+  "county_tool__county_governance__functional_chc"
+  = "Proportion of functional PHC advisory Committees in the Place",
+  "county_tool__county_governance__proportion_pcns_established"
+  = "Proportion of PCNs Established",
+  "county_tool__county_governance__proportion_pcns_gazetted"
+  = "Proportion of PCNs Gazetted",
+  "county_tool__county_governance__functional_pcn_score"
+  = "Availability of a Functional PCN management committee",
+  "county_tool__county_governance__hospitals_management_gazzeted"
+  = "Proportion of Hospital management boards appointed/gazetted",
+  "county_tool__county_governance__facilities_management_gazzeted"
+  = "Proportion of Health Facilities (level 2&3) with Health Facility Management Committee Appointed/Gazetted",
+  "county_tool__county_governance__functional_phc_twg"
+  = "Availability of a functional PHC TWG Score",
+  "county_tool__county_governance__pcns_with_budget"
+  = "Proportion of PCNs with an operational budget for the MDT activities",
+  "county_tool__county_governance__perfomance_reviews_score"
+  = "Performance Review Score",
+  "county_tool__county_governance__support_supervision_score"
+  = "CHMT Support Supervision Score",
+  "county_tool__county_governance__governance_score"
+  = "Governance Score",
+  "county_tool__county_governance__governance_weight"
+  = "Governance Weighted Score",
+  
+  # ── COUNTY TOOL: HRH ─────────────────────────────────────────────────────
+  "county_tool__county_hrh__county_hrh_score"
+  = "HRH Score",
+  "county_tool__county_hrh__hrh_weight"
+  = "HRH Weighted Score",
+  
+  # ── COUNTY TOOL: Health Product Technologies ──────────────────────────────
+  "county_tool__county_hpt__budget"
+  = "Proportion of county health budget allocated to drugs and supplies",
+  "county_tool__county_hpt__phc_budget"
+  = "Proportion of county HPT budget allocated to levels 2&3",
+  "county_tool__county_hpt__hpt_score"
+  = "HPT Score",
+  "county_tool__county_hpt__hpt_weight"
+  = "HPT Weighted Score",
+  
+  # ── COUNTY TOOL: Service Delivery ────────────────────────────────────────
+  "county_tool__county_servicedelivery__functional_pcn_referral_sco"
+  = "PCNs with functional referral mechanisms",
+  "county_tool__county_servicedelivery__sds_score"
+  = "Service Delivery Systems Score",
+  "county_tool__county_servicedelivery__sds_weight"
+  = "Service Delivery Systems Weighted Score",
+  
+  # ── COUNTY TOOL: Health Care Financing ───────────────────────────────────
+  "county_tool__healthcarefinancing__sha_households"
+  = "Proportion of households registered on SHA within the County",
+  "county_tool__healthcarefinancing__hfinance_score"
+  = "Healthcare Financing Score",
+  "county_tool__healthcarefinancing__hfinance_weight"
+  = "Healthcare Financing Weighted Score",
+  
+  # ── COUNTY TOOL: HMIS / Digital Health ───────────────────────────────────
+  "county_tool__county_his__prop_smart_pcn"
+  = "Proportion of SMART PCNs in the County",
+  "county_tool__county_his__his_score"
+  = "HMIS Score",
+  "county_tool__county_his__his_weight"
+  = "HMIS Weighted Score",
+  
+  # ── COUNTY TOOL: QoC Management Systems ──────────────────────────────────
+  "county_tool__county_managementsystems__county_quality_improvemen"
+  = "Mechanism to Coordinate Quality Improvement Score",
+  "county_tool__county_managementsystems__county_support_supervisio"
+  = "Mechanism for Implementation of Support Supervision in Health Facilities Score",
+  "county_tool__county_managementsystems__county_health_department_"
+  = "Presence of an Infection Prevention Control (IPC) committee Score",
+  "county_tool__county_managementsystems__qoc_score"
+  = "QoC Management Systems Score",
+  "county_tool__county_managementsystems__qoc_weight"
+  = "QoC Management Systems Weighted Score",
+  
+  # ── COUNTY TOOL: Multisectoral Partnerships ───────────────────────────────
+  "county_tool__county_partnerships__num_of_biannually_multisectora"
+  = "Number of bi-annual multisectoral stakeholder forums Score",
+  "county_tool__county_partnerships__mou_phc_score"
+  = "Proportion of MOUs and partnership agreements aligned to PHC signed",
+  "county_tool__county_partnerships__num_of_research_studies_on_pcn"
+  = "Research studies done on PCN implementation Score",
+  "county_tool__county_partnerships__mpc_score"
+  = "Multisectoral Partnerships and Coordination Score",
+  "county_tool__county_partnerships__mpc_weight"
+  = "Multisectoral Partnerships and Coordination Weighted Score",
+  
+  # ── COUNTY TOOL: Innovations and Learning ────────────────────────────────
+  "county_tool__county_innovations__learning_forums_score"
+  = "Number of knowledge management and learning forums conducted Score",
+  "county_tool__county_innovations__studies_pcn_implementation_scor"
+  = "No. of research studies done on PCN implementation Score",
+  "county_tool__county_innovations__innovation_score"
+  = "Innovations and Learning Score",
+  "county_tool__county_innovations__innovation_weight"
+  = "Innovations and Learning Weighted Score",
+  "county_tool__county_score"
+  = "Total County Score (Total Weighted Score)",
+  
+  # ── Pass-through columns (keep as-is for establishment tab) ──────────────
+  "establishment_status"  = "establishment_status",
+  "supporting_partner"    = "supporting_partner",
+  "pcn_location"          = "pcn_location"
+)
+
+# Applies rename + normalisation to any data frame — works on both
+# live Kobo submissions and the pcn_lookup.csv fallback
+clean_kobo_data <- function(df) {
+  if (is.null(df) || nrow(df) == 0) return(NULL)
+  
+  # Strip Kobo group prefixes from raw API data (e.g. "group/field" -> "field")
+  # BUT if column names already use __ (from Supabase), leave them alone
+  if (any(grepl("/", names(df)))) {
+    names(df) <- gsub("/", "__", names(df))
+    names(df) <- gsub("[^a-zA-Z0-9_]", "_", names(df))
+    names(df) <- substr(names(df), 1, 63)
+    names(df) <- make.unique(names(df), sep = "_")
+  }
+  
+  # Apply rename map (only renames columns that exist, never duplicates)
+  for (kobo_col in names(KOBO_TO_DASHBOARD)) {
+    display_col <- KOBO_TO_DASHBOARD[[kobo_col]]
+    if (kobo_col %in% names(df) && !display_col %in% names(df))
+      names(df)[names(df) == kobo_col] <- display_col
+  }
+  
+  # Coerce all indicator columns to numeric
+  id_cols  <- c("County", "Subcounty", "PCN", "establishment_status",
+                "supporting_partner", "pcn_location",
+                "_id", "_uuid", "_submission_time", "_submitted_by")
+  num_cols <- setdiff(names(df), id_cols)
+  df[num_cols] <- lapply(df[num_cols], function(x) {
+    # Flatten lists before converting to numeric
+    if (is.list(x)) x <- sapply(x, function(v) {
+      if (is.null(v) || length(v) == 0) NA_character_
+      else as.character(v[[1]])
+    })
+    suppressWarnings(as.numeric(x))
+  })
+  
+  df %>%
+    filter(!is.na(County), County != "",
+           !tolower(trimws(County)) %in% c("county", "national", "kenya")) %>%
+    mutate(
+      County_raw      = County,
+      County_clean    = normalize_name(County),
+      Subcounty_raw   = if ("Subcounty" %in% names(.)) as.character(Subcounty) else NA_character_,
+      Subcounty_clean = if ("Subcounty" %in% names(.)) normalize_name(Subcounty) else NA_character_
+    )
+}
+# ============================================================
+# DATABASE CONNECTION HELPER
+# ============================================================
+get_db_connection <- function() {
+  db_paths <- c(
+    "data/pcn_dashboard.db",                              # ShinyApps.io + GitHub
+    file.path(dirname(pcn_csv_path), "data/pcn_dashboard.db"),  # same folder as project
+    "pcn_dashboard.db"                                    # root fallback
+  )
+  for (p in db_paths) {
+    if (file.exists(p)) {
+      return(dbConnect(RSQLite::SQLite(), p))
+    }
+  }
+  return(NULL)
+}
+
+# ============================================================
+# SUPABASE CONNECTION — reads live Tool 2 data
+# ============================================================
+library(RPostgres)
+
+get_supabase_con <- function() {
+  dbConnect(
+    RPostgres::Postgres(),
+    host     = Sys.getenv("SUPABASE_HOST"),
+    port     = 6543,
+    dbname   = "postgres",
+    user     = Sys.getenv("SUPABASE_USER"),
+    password = Sys.getenv("SUPABASE_PASS"),
+    sslmode  = "require"
+  )
+}
+
+get_last_update <- function() {
+  con <- get_db_connection()
+  if (is.null(con)) return("Unknown")
+  on.exit(dbDisconnect(con))
+  tryCatch(
+    dbGetQuery(con, "SELECT run_timestamp FROM pipeline_metadata LIMIT 1")$run_timestamp,
+    error = function(e) "Unknown"
+  )
+}
 # ============================================================
 # 15. SERVER
 # ============================================================
@@ -2556,20 +2952,123 @@ server <- function(input, output, session) {
   
   kobo_timer <- reactiveTimer(300000)  # refresh every 5 min
   
+  # Reads Tool 2 submissions from Supabase (all 77 PCN indicators)
+# This is the PRIMARY data source for PCN Monitoring and County Monitoring tabs
+supabase_tool2 <- reactive({
+  kobo_timer()
+  tryCatch({
+    con <- get_supabase_con()
+    on.exit(dbDisconnect(con))
+    df <- dbReadTable(con, "tool2_submissions")
+    if (nrow(df) == 0) return(data.frame())
+    clean_kobo_data(df)
+  }, error = function(e) {
+    message("[supabase_tool2] Supabase read failed: ", e$message)
+    data.frame()
+  })
+})
+indicator_cols <- reactive({
+  df <- supabase_tool2()
+  if (is.null(df) || nrow(df) == 0) return(character(0))
+  # Only return columns that exist in pcn_indicators display names
+  valid_inds <- unlist(pcn_indicators, use.names = FALSE)
+  intersect(valid_inds, names(df))
+})
+
   data_pcn_live <- reactive({
     kobo_timer()
-    df <- fetch_kobo(KOBO_PCN_UID)
-    df %>%
-      filter(!is.na(County), County != "", !is.na(Subcounty), !is.na(PCN)) %>%
-      mutate(
-        County          = as.character(County),
-        Subcounty       = as.character(Subcounty),
-        PCN             = as.character(PCN),
-        County_raw      = County,
-        County_clean    = normalize_name(County),
-        Subcounty_raw   = Subcounty,
-        Subcounty_clean = normalize_name(Subcounty)
+    
+    # Path 1: live Kobo submissions
+    df <- tryCatch(fetch_kobo(KOBO_PCN_UID), error = function(e) data.frame())
+    if (nrow(df) > 0) df <- clean_kobo_data(df)
+    
+    # Path 2: SQLite database (committed by pipeline nightly)
+    if (is.null(df) || nrow(df) == 0) {
+      con <- get_db_connection()
+      if (!is.null(con)) {
+        message("[data_pcn_live] Reading from pcn_dashboard.db")
+        df <- tryCatch(
+          dbGetQuery(con, "SELECT * FROM pcn_indicators"),
+          error = function(e) data.frame()
+        )
+        dbDisconnect(con)
+        if (nrow(df) > 0) df <- clean_kobo_data(df)
+      }
+    }
+    
+    # Path 3: CSV fallback
+    if (is.null(df) || nrow(df) == 0) {
+      csv_candidates <- c(
+        "data/pcn_lookup.csv",
+        file.path(dirname(pcn_csv_path), "pcn_lookup.csv")
       )
+      for (p in csv_candidates) {
+        if (file.exists(p)) {
+          message("[data_pcn_live] Reading CSV: ", p)
+          df <- readr::read_csv(p, show_col_types = FALSE) %>%
+            rename(County = county, Subcounty = subcounty, PCN = pcn_name)
+          df <- clean_kobo_data(df)
+          break
+        }
+      }
+    }
+    
+    if (is.null(df) || nrow(df) == 0) {
+      return(data.frame(County = character(), Subcounty = character(), PCN = character()))
+    }
+    
+    df
+  })
+  
+  
+  # ── CSV refresh timer + button ──────────────────────────────
+  csv_refresh <- reactiveVal(0)
+  
+  observeEvent(input$refresh_csv, {
+    pcn_csv_data <<- load_pcn_csv()
+    
+    # Rebuild pcn_points from refreshed CSV
+    if (nrow(pcn_csv_data) > 0 && "pcn_location" %in% names(pcn_csv_data)) {
+      pts <- tryCatch({
+        pcn_csv_data %>%
+          select(PCN, County, Subcounty, pcn_location) %>%
+          filter(!is.na(pcn_location), pcn_location != "") %>%
+          mutate(
+            coord_clean = stringr::str_replace_all(pcn_location, "\\s+", ""),
+            lon         = as.numeric(stringr::str_extract(coord_clean, "^[^,]+")),
+            lat         = as.numeric(stringr::str_extract(coord_clean, "(?<=,).*")),
+            lon_fixed   = ifelse(abs(lon) > 90, lon, lat),
+            lat_fixed   = ifelse(abs(lon) > 90, lat, lon)
+          ) %>%
+          filter(!is.na(lat_fixed), !is.na(lon_fixed)) %>%
+          st_as_sf(coords = c("lon_fixed", "lat_fixed"), crs = 4326, remove = FALSE) %>%
+          mutate(
+            County_clean    = normalize_name(County),
+            Subcounty_clean = normalize_name(Subcounty)
+          )
+      }, error = function(e) { NULL })
+      
+      if (!is.null(pts)) pcn_points <<- pts
+    }
+    
+    csv_refresh(csv_refresh() + 1)
+    showNotification("✓ Data refreshed", type = "message", duration = 3)
+  })
+  
+  # Wrapper reactive so server reactives can depend on refresh
+  data_pcn_csv <- reactive({
+    csv_refresh()
+    pcn_csv_data
+  })
+  
+  # ── Populate establishment filter dropdowns from CSV ────
+  observe({
+    df <- data_pcn_csv()
+    if (nrow(df) == 0) return()
+    counties <- c("All", sort(unique(trimws(df$County))))
+    updateSelectInput(session, "subcounty_filter",   choices = counties, selected = "All")
+    updateSelectInput(session, "pcn_filter",          choices = counties, selected = "All")
+    updateSelectInput(session, "partner_county_filter", choices = counties, selected = "All")
   })
   
   # ── 15a. Authentication ─────────────────────────────────
@@ -2738,6 +3237,8 @@ server <- function(input, output, session) {
   # ── PCN donut chart ──
   output$pcn_donut <- renderPlotly({
     x <- pcn_status_summary()
+    df <- data_pcn_csv()          # ← add this
+    total_pcns <- nrow(df)
     
     donut_data <- data.frame(
       status = c("Operational", "Gazetted", "Ongoing Establishment",
@@ -2747,8 +3248,6 @@ server <- function(input, output, session) {
                  x$Pending, x$NotGazetted, x$Awaiting, x$PartnerSupport),
       color  = c("#006400", "#2E8B57", "#9ACD32","#FFD700", "#FFA500", "#FF4500", "#B22222")
     )
-    
-    total_pcns <- sum(donut_data$count, na.rm = TRUE)
     
     plot_ly(
       donut_data,
@@ -2921,23 +3420,17 @@ server <- function(input, output, session) {
   # Updates partner subcounty dropdown when county changes
   observe({
     selected_county <- input$partner_county_filter
-    
     subs <- if (is.null(selected_county) || selected_county == "All") {
-      sort(unique(data_pcn_live()$Subcounty))
+      sort(unique(data_pcn_csv()$Subcounty))
     } else {
-      sort(unique(data_pcn_live()$Subcounty[data_pcn_live()$County == selected_county]))
+      sort(unique(data_pcn_csv()$Subcounty[data_pcn_csv()$County == selected_county]))
     }
-    
-    updateSelectizeInput(
-      session,
-      "partner_subcounty_filter",
-      choices  = c("All", subs),
-      selected = "All"
-    )
-  }) 
+    updateSelectizeInput(session, "partner_subcounty_filter",
+                         choices = c("All", subs), selected = "All")
+  })
   
   observe({
-    df <- data_pcn_live()
+    df <- data_pcn_csv()
     if (!is.null(input$partner_county_filter) && input$partner_county_filter != "All")
       df <- df %>% filter(County == input$partner_county_filter)
     if (!is.null(input$partner_subcounty_filter) && input$partner_subcounty_filter != "All")
@@ -2950,6 +3443,18 @@ server <- function(input, output, session) {
   
   add_dummy_subcounty_values <- function(df, indicator_col, use_dummy = TRUE) {
     df <- as_tibble(df)
+ 
+    # ── If no real data AND dummy is ON, generate purely from shapefile ──
+    if ((nrow(df) == 0 || !indicator_col %in% names(df)) && use_dummy) {
+      all_subcounties <- subc_shp %>% st_drop_geometry() %>%
+        select(Subcounty_clean) %>% distinct()
+      return(
+        all_subcounties %>%
+          mutate(!!indicator_col := round(runif(nrow(.), 10, 90), 1),
+                 real_data = FALSE)
+      )
+    }
+    
     if (!"Subcounty_clean" %in% names(df))  df$Subcounty_clean <- rep(NA_character_, nrow(df))
     if (!indicator_col %in% names(df))       df[[indicator_col]] <- rep(NA_real_,      nrow(df))
     
@@ -2981,6 +3486,17 @@ server <- function(input, output, session) {
   
   add_dummy_pcn_values <- function(df, indicator_col, available_pcns = NULL, use_dummy = TRUE) {
     df <- as_tibble(df)
+    
+    # ── If no real data AND dummy is ON, generate purely from shapefile ──
+    if ((nrow(df) == 0 || !indicator_col %in% names(df)) && use_dummy) {
+      all_subcounties <- subc_shp %>% st_drop_geometry() %>%
+        select(Subcounty_clean) %>% distinct()
+      return(
+        all_subcounties %>%
+          mutate(!!indicator_col := round(runif(nrow(.), 10, 90), 1),
+                 real_data = FALSE)
+      )
+    }
     if (!"PCN"   %in% names(df))       df$PCN          <- rep(NA_character_, nrow(df))
     if (!indicator_col %in% names(df)) df[[indicator_col]] <- rep(NA_real_,  nrow(df))
     
@@ -3012,7 +3528,7 @@ server <- function(input, output, session) {
   # ── 15f. Establishment data — core reactive ──────────────
   # Computes all PCN / subcounty / county establishment totals
   establishment_data <- reactive({
-    df <- data_pcn_live()
+    df <- data_pcn_csv()
     
     finalized_status <- c("gazettement_ongoing","pending_gazettement","Gazetted",
                           "gazetted_and_operational","new_sub_county_not_gazetted",
@@ -3062,7 +3578,7 @@ server <- function(input, output, session) {
   # ── 15g. County status summary reactive ─────────────────
   # Counts how many counties have each establishment status
   county_status_summary <- reactive({
-    data_pcn_live() %>%
+    data_pcn_csv() %>%
       mutate(County = trimws(County)) %>%
       filter(!is.na(County), County != "", tolower(County) != "county") %>%
       group_by(County) %>%
@@ -3086,7 +3602,7 @@ server <- function(input, output, session) {
   # Returns county names that have a given establishment status
   counties_with_status <- function(status_values, require_all = FALSE) {
     
-    df <- data_pcn_live() %>%
+    df <- data_pcn_csv() %>%
       mutate(County = trimws(County)) %>%
       filter(!is.na(County), County != "",
              tolower(County) != "county")
@@ -3114,7 +3630,7 @@ server <- function(input, output, session) {
   
   # Returns subcounty names that have a given establishment status
   subcounties_with_status <- function(status_values) {
-    data_pcn_live() %>%
+    data_pcn_csv() %>%
       mutate(Subcounty = trimws(Subcounty)) %>%
       filter(!is.na(Subcounty), Subcounty != "",
              establishment_status %in% status_values) %>%
@@ -3125,7 +3641,7 @@ server <- function(input, output, session) {
   
   # Returns PCN names that have a given establishment status
   pcns_with_status <- function(status_values) {
-    data_pcn_live() %>%
+    data_pcn_csv() %>%
       mutate(PCN = trimws(PCN)) %>%
       filter(!is.na(PCN), PCN != "",
              establishment_status %in% status_values) %>%
@@ -3138,7 +3654,7 @@ server <- function(input, output, session) {
   # ── 15h. Subcounty status summary reactive ───────────────
   # Counts how many subcounties have each establishment status
   subcounty_status_summary <- reactive({
-    data_pcn_live() %>%
+    data_pcn_csv() %>%
       mutate(Subcounty = trimws(Subcounty)) %>%
       group_by(Subcounty) %>%
       summarise(
@@ -3163,7 +3679,7 @@ server <- function(input, output, session) {
   # ── 15i. PCN status summary reactive ────────────────────
   # Counts individual PCN rows by each establishment status
   pcn_status_summary <- reactive({
-    data_pcn_live() %>%
+    data_pcn_csv() %>%
       mutate(establishment_status = trimws(establishment_status)) %>%
       summarise(
         Gazetted       = sum(establishment_status %in% c("gazetted","gazetted_and_operational"), na.rm = TRUE),
@@ -3183,8 +3699,8 @@ server <- function(input, output, session) {
   # Subcounty establishment bar chart (filtered by county dropdown)
   subcounty_perf <- reactive({
     df <- if (input$subcounty_filter != "All")
-      data_pcn_live() %>% filter(County == input$subcounty_filter)
-    else data_pcn_live()
+      data_pcn_csv() %>% filter(County == input$subcounty_filter)
+    else data_pcn_csv()
     
     df %>%
       mutate(establishment_status = trimws(establishment_status)) %>%
@@ -3201,8 +3717,8 @@ server <- function(input, output, session) {
   # PCN establishment bar chart (filtered by county dropdown)
   pcn_perf_status <- reactive({
     df <- if (input$pcn_filter != "All")
-      data_pcn_live() %>% filter(County == input$pcn_filter)
-    else data_pcn_live()
+      data_pcn_csv() %>% filter(County == input$pcn_filter)
+    else data_pcn_csv()
     
     df %>%
       mutate(establishment_status = trimws(establishment_status)) %>%
@@ -3222,7 +3738,7 @@ server <- function(input, output, session) {
   
   output$county_total_box <- renderUI({
     x <- county_status_summary()
-    all_counties <- sort(unique(trimws(data_pcn$County)))
+    all_counties <- sort(unique(trimws(data_pcn_csv()$County)))
     glossy_box("Total Counties", x$Total, "", "bg-blue",
                counties = all_counties)
   })
@@ -3274,7 +3790,7 @@ server <- function(input, output, session) {
   # ── 15l. Subcounty glossy boxes ─────────────────────────
   output$sub_total_box2 <- renderUI({
     x <- subcounty_status_summary()
-    all_subs <- sort(unique(trimws(data_pcn$Subcounty)))
+    all_subs     <- sort(unique(trimws(data_pcn_csv()$Subcounty)))
     glossy_box("Total Subcounties", x$Total, "", "bg-blue",
                items     = all_subs,
                item_type = "Subcounty")
@@ -3333,9 +3849,10 @@ server <- function(input, output, session) {
   
   # ── 15m. PCN glossy boxes ───────────────────────────────
   output$pcn_total_box <- renderUI({
-    est      <- establishment_data()
-    all_pcns <- sort(unique(trimws(data_pcn$PCN)))
-    glossy_box("Total PCNs", est$totals$pcns, "", "bg-blue",
+    x        <- pcn_status_summary()
+    total    <- x$Gazetted + x$Ongoing + x$Pending + x$NotGazetted + x$Awaiting + x$PartnerSupport
+    all_pcns <- sort(unique(trimws(data_pcn_csv()$PCN)))
+    glossy_box("Total PCNs", total, "", "bg-blue",
                items     = all_pcns,
                item_type = "PCN")
   })
@@ -3500,7 +4017,7 @@ server <- function(input, output, session) {
   
   # Dynamic height based on number of partners for the partners chart
   output$est_partner_chart_ui <- renderUI({
-    df <- data_pcn_live()
+    df <- data_pcn_csv()
     if (!is.null(input$partner_county_filter) && input$partner_county_filter != "All")
       df <- df %>% filter(County == input$partner_county_filter)
     if (!is.null(input$partner_subcounty_filter) && input$partner_subcounty_filter != "All")
@@ -3521,7 +4038,7 @@ server <- function(input, output, session) {
   # ── 15o. Partner support horizontal bar chart ────────────
   output$est_partner_chart <- renderPlotly({
     
-    df <- data_pcn_live()
+    df <- data_pcn_csv()
     
     if (!is.null(input$partner_county_filter) && input$partner_county_filter != "All")
       df <- df %>% filter(County == input$partner_county_filter)
@@ -3924,7 +4441,26 @@ server <- function(input, output, session) {
   
   
   # ── 15t. Render all 14 PCN monitoring tab UIs ───────────
-  output$tab_overview_ui     <- renderUI({ tagList(bs4Card(title="Overview Dashboard",status="primary",collapsible=TRUE,width=12, h3("Overview Summary",style="color:#004c97;"), p("This tab gives a full national overview of PCN indicators."), make_tab_ui(indicator_cols,"overview"))) })
+  # Define fallback demo indicators at the top of server (after show_dummy)
+  demo_indicator_fallback <- c(
+    "Governance Score", "HRH Score", "HMIS Score",
+    "Healthcare Financing Score", "Health Infrastructure Score",
+    "Service Delivery Score", "QoC Management Systems Score",
+    "QoC PHC Core Systems Score", "QoC Outcomes Score",
+    "Social Accountability Score", "Innovations and Learning Score",
+    "Population Needs Score", "Capacity Readiness Score",
+    "Ambulance Request Score"
+  )
+  
+  output$tab_overview_ui <- renderUI({
+    inds <- indicator_cols()
+    if (length(inds) == 0) inds <- demo_indicator_fallback
+    tagList(bs4Card(title="Overview Dashboard", status="primary",
+                    collapsible=TRUE, width=12,
+                    h3("Overview Summary", style="color:#004c97;"),
+                    p("This tab gives a full national overview of PCN indicators."),
+                    make_tab_ui(inds, "overview")))
+  })
   output$tab_governance_ui   <- renderUI({ make_tab_ui(pcn_indicators[["Governance"]],                         "governance")    })
   output$tab_pophealth_ui    <- renderUI({ make_tab_ui(pcn_indicators[["Population Health Needs"]],            "pophealth")     })
   output$tab_capacity_ui     <- renderUI({ make_tab_ui(pcn_indicators[["Capacity Readiness"]],                 "capacity")      })
@@ -3999,7 +4535,11 @@ server <- function(input, output, session) {
       # Data reactive
       county_data <- reactive({
         ind <- input[[paste0(prefix,"_indicator")]]; req(ind)
-        data_county %>%
+        df <- supabase_tool2()
+        if (is.null(df) || nrow(df) == 0 || !ind %in% names(df)) {
+          return(tibble(County = character(), Value = numeric()))
+        }
+        df %>%
           filter(!tolower(County) %in% c("national", "kenya", "total", "national total")) %>%
           group_by(County) %>%
           summarise(Value = mean(.data[[ind]], na.rm = TRUE), .groups = "drop")
@@ -4181,19 +4721,47 @@ server <- function(input, output, session) {
         if (dummy_sub_chart()) div(class = "nodata-watermark", "DEMO DATA")
       })
       # Map settings popup helpers (defined once per prefix)
-      make_map_settings_ui <- function() {
+make_map_settings_ui <- function() {
         div(tags$h5("Map Controls"),
-            numericInput(paste0(prefix,"_cnty_map_label_size"),  "Label Size:", 5, 1, 20),
-            radioButtons( paste0(prefix,"_cnty_map_label_color"),"Label Color:", c("Black"="black","White"="white"))
+            numericInput(paste0(prefix,"_cnty_map_label_size"), "Label Size:", 5, 1, 20),
+            radioButtons(
+              paste0(prefix,"_cnty_map_label_color"),
+              label = tags$span("Label Color:",
+                                style = "color:#00eaff; font-weight:700; font-size:13px;"),
+              choiceNames  = list(
+                tags$span("● Black",
+                          style = "color:#111111; font-weight:700; font-size:13px;
+                             background:rgba(255,255,255,0.85); padding:2px 10px;
+                             border-radius:5px;"),
+                tags$span("● White",
+                          style = "color:#ffffff; font-weight:700; font-size:13px;
+                             text-shadow:0 0 4px rgba(0,0,0,0.8);")
+              ),
+              choiceValues = list("black", "white")
+            )
         )
       }
       
-      make_pcn_map_settings_ui <- function() {
+make_pcn_map_settings_ui <- function() {
         div(tags$h5("PCN Map Controls"),
             checkboxInput(paste0(prefix,"_show_pcns"),             "Show PCNs",              value = FALSE),
             checkboxInput(paste0(prefix,"_show_subcounty_labels"), "Show Subcounty Labels",  value = FALSE),
             numericInput( paste0(prefix,"_pcn_map_label_size"),    "Label Size:", 5, 1, 20),
-            radioButtons( paste0(prefix,"_pcn_map_label_color"),   "Label Color:", c("Black"="black","White"="white"))
+            radioButtons(
+              paste0(prefix,"_pcn_map_label_color"),
+              label = tags$span("Label Color:",
+                                style = "color:#00eaff; font-weight:700; font-size:13px;"),
+              choiceNames  = list(
+                tags$span("● Black",
+                          style = "color:#111111; font-weight:700; font-size:13px;
+                             background:rgba(255,255,255,0.85); padding:2px 10px;
+                             border-radius:5px;"),
+                tags$span("● White",
+                          style = "color:#ffffff; font-weight:700; font-size:13px;
+                             text-shadow:0 0 4px rgba(0,0,0,0.8);")
+              ),
+              choiceValues = list("black", "white")
+            )
         )
       }
       
@@ -4243,20 +4811,31 @@ server <- function(input, output, session) {
           mutate(County = trimws(County), County_clean = normalize_name(County)) %>%
           select(County, County_clean)
         
-        df_summary <- data_pcn_live() %>%
-          mutate(County = trimws(County), County_clean = normalize_name(County)) %>%
-          filter(!tolower(County) %in% c("national", "kenya", "total", "national total")) %>%
-          group_by(County_clean) %>%
-          summarise(Value = mean(.data[[ind]], na.rm = TRUE), .groups = "drop")
+        live_df <- supabase_tool2()
+        
+        df_summary <- if (nrow(live_df) > 0 && ind %in% names(live_df)) {
+          live_df %>%
+            mutate(County = trimws(County), County_clean = normalize_name(County)) %>%
+            filter(!tolower(County) %in% c("national","kenya","total","national total")) %>%
+            group_by(County_clean) %>%
+            summarise(Value = mean(.data[[ind]], na.rm = TRUE), .groups = "drop")
+        } else {
+          tibble(County_clean = character(), Value = numeric())
+        }
         
         df_all <- ref_map %>% left_join(df_summary, by = "County_clean") %>%
           mutate(Value = as.numeric(Value), real_data = !is.na(Value))
         
-        if (any(is.na(df_all$Value))) {
-          nas <- is.na(df_all$Value)
+        # Fill all NAs — either with dummy random data or leave as NA
+        nas <- is.na(df_all$Value)
+        if (any(nas)) {
           df_all$Value[nas]     <- if (use_dummy_here) round(runif(sum(nas), 10, 90), 1) else NA_real_
           df_all$real_data[nas] <- FALSE
         }
+        
+        # If ALL values are still NA (dummy is OFF, no real data), return empty to skip render
+        if (!use_dummy_here && all(is.na(df_all$Value))) return(tibble())
+        
         df_all %>% arrange(desc(Value))
       })
       
@@ -4269,27 +4848,38 @@ server <- function(input, output, session) {
           mutate(County = trimws(County), County_clean = normalize_name(County)) %>%
           select(County, County_clean)
         
-        df_summary <- data_pcn_live() %>%
-          mutate(County = trimws(County), County_clean = normalize_name(County)) %>%
-          filter(!tolower(County) %in% c("national", "kenya", "total", "national total")) %>%
-          group_by(County_clean) %>%
-          summarise(Value = mean(.data[[ind]], na.rm = TRUE), .groups = "drop")
+        live_df <- supabase_tool2()
+        
+        df_summary <- if (nrow(live_df) > 0 && ind %in% names(live_df)) {
+          live_df %>%
+            mutate(County = trimws(County), County_clean = normalize_name(County)) %>%
+            filter(!tolower(County) %in% c("national","kenya","total","national total")) %>%
+            group_by(County_clean) %>%
+            summarise(Value = mean(.data[[ind]], na.rm = TRUE), .groups = "drop")
+        } else {
+          tibble(County_clean = character(), Value = numeric())
+        }
         
         df_all <- ref_map %>% left_join(df_summary, by = "County_clean") %>%
           mutate(Value = as.numeric(Value), real_data = !is.na(Value))
         
-        if (any(is.na(df_all$Value))) {
-          nas <- is.na(df_all$Value)
+        nas <- is.na(df_all$Value)
+        if (any(nas)) {
           df_all$Value[nas]     <- if (use_dummy_here) round(runif(sum(nas), 10, 90), 1) else NA_real_
           df_all$real_data[nas] <- FALSE
         }
+        
+        if (!use_dummy_here && all(is.na(df_all$Value))) return(tibble())
+        
         df_all %>% arrange(desc(Value))
       })
       # ── Shared national bar-chart builder ──────────────
       build_nat_chart <- function(df, ind_label, bar_color, bar_width,
                                   label_size, title_size, font_family,
                                   angle = 90, title_prefix = "National") {
-        kenya_avg <- suppressWarnings(mean(df$Value[df$real_data], na.rm = TRUE))
+        kenya_avg <- suppressWarnings(
+          mean(df$Value[if("real_data" %in% names(df)) df$real_data else rep(TRUE, nrow(df))], na.rm = TRUE)
+        )
         if (is.nan(kenya_avg)) kenya_avg <- NA_real_
         
         df_final <- bind_rows(df, tibble(County="Kenya",County_clean="kenya",
@@ -4337,7 +4927,7 @@ server <- function(input, output, session) {
       
       # Expanded modal chart
       output[[paste0(prefix,"_nat_chart_big")]] <- renderPlot({
-        df <- nat_data(); req(df)
+        df <- nat_data(); req(nrow(df) > 0)
         build_nat_chart(df, input[[paste0(prefix,"_indicator")]],
                         bar_color   = input[[paste0(prefix,"_nat_color")]]       %||% "#1a73e8",
                         bar_width   = input[[paste0(prefix,"_nat_col_width")]]   %||% 0.6,
@@ -4377,6 +4967,7 @@ server <- function(input, output, session) {
       # ── National choropleth map ─────────────────────────
       output[[paste0(prefix,"_nat_map")]] <- renderGirafe({
         df <- nat_data_map()
+        req(nrow(df) > 0)
         map_df      <- county_shp %>% left_join(df, by = "County")
         label_size  <- input[[paste0(prefix,"_cnty_map_label_size")]]  %||% 5
         label_color <- input[[paste0(prefix,"_cnty_map_label_color")]] %||% "black"
@@ -4414,35 +5005,46 @@ server <- function(input, output, session) {
         ind  <- input[[paste0(prefix,"_pcn_indicator")]]; req(ind)
         cnty <- input[[paste0(prefix,"_pcn_county")]]
         sub  <- input[[paste0(prefix,"_pcn_subcounty")]]
+        use_dummy_here <- dummy_pcn_chart()
         
-        df <- data_pcn_live()
-        if (cnty != "Kenya") df <- df %>% filter(County_clean    == normalize_name(cnty))
-        if (sub  != "All")   df <- df %>% filter(Subcounty_clean == normalize_name(sub))
+        live_df <- supabase_tool2()
+        
+        # Build available PCNs from shapefile when no live data
+        if (nrow(live_df) == 0 || !ind %in% names(live_df)) {
+          available_pcns <- if (!is.null(cnty) && cnty != "Kenya")
+            subc_shp %>% filter(County_clean == normalize_name(cnty)) %>%
+            st_drop_geometry() %>% distinct(Subcounty_raw) %>% rename(PCN = Subcounty_raw)
+          else
+            subc_shp %>% st_drop_geometry() %>% distinct(Subcounty_raw) %>% rename(PCN = Subcounty_raw)
+          
+          df_pcn <- data.frame(PCN = available_pcns$PCN, Value = NA_real_, stringsAsFactors = FALSE)
+          df_pcn <- add_dummy_pcn_values(df_pcn, "Value", available_pcns, use_dummy = use_dummy_here)
+          
+          if (!use_dummy_here) return(tibble())
+          return(df_pcn %>% arrange(desc(Value)) %>% slice(1:15))
+        }
+        
+        # Filter live data by county/subcounty
+        df <- live_df
+        if (!is.null(cnty) && cnty != "Kenya") df <- df %>% filter(County_clean == normalize_name(cnty))
+        if (!is.null(sub)  && sub  != "All")   df <- df %>% filter(Subcounty_clean == normalize_name(sub))
         
         available_pcns <- df %>% select(PCN) %>% distinct()
         
         df_pcn <- df %>% group_by(PCN) %>%
-          summarise(Value = suppressWarnings(mean(.data[[ind]], na.rm=TRUE)), .groups="drop")
+          summarise(Value = suppressWarnings(mean(.data[[ind]], na.rm = TRUE)), .groups = "drop")
         
         if (!"Value" %in% names(df_pcn)) df_pcn$Value <- NA_real_
         if (!"PCN"   %in% names(df_pcn)) df_pcn$PCN   <- character(nrow(df_pcn))
         
-        df_pcn <- add_dummy_pcn_values(df_pcn, "Value", available_pcns, use_dummy = dummy_pcn_chart())
+        df_pcn <- add_dummy_pcn_values(df_pcn, "Value", available_pcns, use_dummy = use_dummy_here)
         
-        if (nrow(df) == 0) {
-          available_pcns <- if (cnty != "Kenya")
-            subc_shp %>% filter(County_clean==cnty) %>% st_drop_geometry() %>%
-            distinct(Subcounty_raw) %>% rename(PCN=Subcounty_raw)
-          else
-            subc_shp %>% st_drop_geometry() %>% distinct(Subcounty_raw) %>% rename(PCN=Subcounty_raw)
-          
-          df_pcn <- add_dummy_pcn_values(
-            data.frame(PCN=available_pcns$PCN, Value=NA, stringsAsFactors=FALSE),
-            "Value", available_pcns, use_dummy = dummy_pcn_chart())
-        }
+        if (!use_dummy_here && all(is.na(df_pcn$Value))) return(tibble())
         
-        if (cnty == "Kenya") df_pcn %>% arrange(desc(Value)) %>% slice(1:15)
-        else                 df_pcn %>% arrange(desc(Value))
+        if (is.null(cnty) || cnty == "Kenya")
+          df_pcn %>% arrange(desc(Value)) %>% slice(1:15)
+        else
+          df_pcn %>% arrange(desc(Value))
       })
       
       # ── Shared PCN bar-chart builder ───────────────────
@@ -4504,24 +5106,41 @@ server <- function(input, output, session) {
       })
       
       # ── Subcounty map ───────────────────────────────────
-      output[[paste0(prefix,"_pcn_map")]] <- renderGirafe({
+  output[[paste0(prefix,"_pcn_map")]] <- renderGirafe({
         ind  <- input[[paste0(prefix,"_pcn_indicator")]]; req(ind)
         cnty <- input[[paste0(prefix,"_pcn_county")]]
         sub  <- input[[paste0(prefix,"_pcn_subcounty")]]
+        use_dummy_here <- dummy_pcn_map()
         
-        df <- data_pcn_live()
-        if (!is.null(cnty) && cnty != "Kenya") df <- df %>% filter(County_clean    == cnty)
-        if (!is.null(sub)  && sub  != "All")   df <- df %>% filter(Subcounty_clean == normalize_name(sub))
+        live_df <- supabase_tool2()
         
         shp_filtered <- subc_shp
-        if (!is.null(cnty) && cnty != "Kenya") shp_filtered <- shp_filtered %>% filter(County_clean    == cnty)
+        if (!is.null(cnty) && cnty != "Kenya") shp_filtered <- shp_filtered %>% filter(County_clean == normalize_name(cnty))
         if (!is.null(sub)  && sub  != "All")   shp_filtered <- shp_filtered %>% filter(Subcounty_clean == normalize_name(sub))
         
-        df_sub <- add_dummy_subcounty_values(
-          df %>% group_by(Subcounty_clean) %>%
-            summarise(Value=mean(.data[[ind]],na.rm=TRUE),.groups="drop") %>%
-            mutate(Value=as.numeric(Value)), "Value", use_dummy = dummy_pcn_map())
-        
+        # Build subcounty values — dummy if no live data or indicator missing
+        if (nrow(live_df) == 0 || !ind %in% names(live_df)) {
+          if (!use_dummy_here) {
+            # Show empty grey map when demo is OFF and no real data
+            df_sub <- shp_filtered %>% st_drop_geometry() %>%
+              distinct(Subcounty_clean) %>%
+              mutate(Value = NA_real_)
+          } else {
+            df_sub <- shp_filtered %>% st_drop_geometry() %>%
+              distinct(Subcounty_clean) %>%
+              mutate(Value = round(runif(n(), 10, 90), 1))
+          }
+        } else {
+          df <- live_df
+          if (!is.null(cnty) && cnty != "Kenya") df <- df %>% filter(County_clean    == normalize_name(cnty))
+          if (!is.null(sub)  && sub  != "All")   df <- df %>% filter(Subcounty_clean == normalize_name(sub))
+          
+          df_sub <- add_dummy_subcounty_values(
+            df %>% group_by(Subcounty_clean) %>%
+              summarise(Value = mean(.data[[ind]], na.rm = TRUE), .groups = "drop") %>%
+              mutate(Value = as.numeric(Value)),
+            "Value", use_dummy = use_dummy_here)
+        }
         map_df <- shp_filtered %>% left_join(df_sub, by="Subcounty_clean")
         
         p <- ggplot(map_df) +
@@ -4535,9 +5154,32 @@ server <- function(input, output, session) {
                                limits=c(0,100), breaks=seq(0,100,20),
                                oob=scales::squish, na.value="#f0f0f0") +
           map_theme() +
-          labs(title=paste(ind)) +
-          theme(plot.title=element_text(margin=margin(b=25)), plot.margin=margin(20,20,70,20))
-        
+          labs(
+            title    = paste(ind),
+            subtitle = {
+              county_label <- if (!is.null(cnty) && cnty != "Kenya")
+                paste0("<span style='color:#1a73e8; font-size:15pt'><b>",
+                       stringr::str_to_title(cnty), " County</b></span>")
+              else NULL
+              
+              sub_label <- if (!is.null(sub) && sub != "All")
+                paste0("<span style='color:#27ae60; font-size:15pt'><b>",
+                       stringr::str_to_title(sub), " Subcounty</b></span>")
+              else NULL
+              
+              parts <- Filter(Negate(is.null), list(county_label, sub_label))
+              if (length(parts) > 0) paste(parts, collapse = "  |  ") else NULL
+            }
+          ) +
+          theme(
+            plot.title    = element_text(size = 14, face = "bold", margin = margin(b = 4)),
+            plot.subtitle = ggtext::element_markdown(
+              size   = 15,
+              face   = "bold",
+              margin = margin(b = 20)
+            ),
+            plot.margin = margin(20, 20, 70, 20)
+          )
         if (isTRUE(input[[paste0(prefix,"_show_subcounty_labels")]]))
           p <- p + geom_sf_text(aes(label=Subcounty_raw),
                                 size  = input[[paste0(prefix,"_pcn_map_label_size")]]  %||% 5,
@@ -4548,18 +5190,29 @@ server <- function(input, output, session) {
                            text_cex=1.2,tick_height=0.6,line_width=0.8,pad_y=unit(0.1,"cm")) +
           annotation_north_arrow(location="tr",which_north="true",style=north_arrow_orienteering)
         
+        # AFTER (fixed — uses static pcn_csv_data from pcn_lvl_data.csv):
         if (isTRUE(input[[paste0(prefix,"_show_pcns")]])) {
-          pcn_perf <- data_pcn %>% group_by(PCN) %>%
-            summarise(Value=mean(.data[[ind]],na.rm=TRUE),.groups="drop")
-          pcn_filtered <- pcn_points %>% left_join(pcn_perf, by="PCN")
-          if (cnty != "Kenya") pcn_filtered <- pcn_filtered %>% filter(County_clean    == cnty)
-          if (sub  != "All")   pcn_filtered <- pcn_filtered %>% filter(Subcounty_clean == normalize_name(sub))
-          
-          p <- p + geom_sf_interactive(data=pcn_filtered,
-                                       aes(tooltip=paste0("PCN: ",PCN,"\nCounty: ",County,"\nSubcounty: ",Subcounty,
-                                                          "\nPerformance: ",ifelse(is.na(Value),"NA",paste0(round(Value,1),"%"))),
-                                           data_id=PCN),
-                                       shape=21, size=4.5, fill="#2C7BE5", color="black", stroke=0.8)
+          if (!is.null(pcn_points) && nrow(pcn_points) > 0) {
+            
+            pcn_filtered <- pcn_points %>%
+              select(PCN, County, Subcounty, County_clean, Subcounty_clean, geometry)
+            
+            if (!is.null(cnty) && cnty != "Kenya")
+              pcn_filtered <- pcn_filtered %>% filter(County_clean == normalize_name(cnty))
+            if (!is.null(sub) && sub != "All")
+              pcn_filtered <- pcn_filtered %>% filter(Subcounty_clean == normalize_name(sub))
+            
+            if (nrow(pcn_filtered) > 0) {
+              p <- p + geom_sf_interactive(
+                data = pcn_filtered,
+                aes(
+                  tooltip = paste0("PCN: ", PCN, "\nCounty: ", County, "\nSubcounty: ", Subcounty),
+                  data_id = PCN
+                ),
+                shape = 21, size = 4.5, fill = "#2C7BE5", color = "black", stroke = 0.8
+              )
+            }
+          }
         }
         
         girafe(ggobj=p, width_svg=20, height_svg=18, options=list(
@@ -4576,25 +5229,67 @@ server <- function(input, output, session) {
         cnty  <- input[[paste0(prefix,"_subchart_county")]]
         sub   <- input[[paste0(prefix,"_subchart_subcounty")]]
         top_n <- input[[paste0(prefix,"_sub_top_n")]] %||% 20
+        use_dummy_here <- dummy_sub_chart()
         
-        df <- data_pcn_live() %>%
-          mutate(County_clean=normalize_name(County), Subcounty_clean=normalize_name(Subcounty))
-        if (cnty != "Kenya") df <- df %>% filter(County_clean    == normalize_name(cnty))
-        if (sub  != "All")   df <- df %>% filter(Subcounty_clean == normalize_name(sub))
+        live_df <- supabase_tool2()
         
-        if (nrow(df) == 0)
-          return(tibble(Subcounty=character(), Value=numeric(), is_county=logical()))
+        # No live data — generate dummy from shapefile
+        if (nrow(live_df) == 0 || !ind %in% names(live_df)) {
+          shp_filtered <- subc_shp
+          if (!is.null(cnty) && cnty != "Kenya")
+            shp_filtered <- shp_filtered %>% filter(County == cnty)
+          
+          dummy_subs <- shp_filtered %>% st_drop_geometry() %>%
+            distinct(Subcounty) %>%
+            mutate(Value = if (use_dummy_here) round(runif(n(), 10, 90), 1) else NA_real_,
+                   is_county = FALSE)
+          
+          if (!use_dummy_here) return(tibble(Subcounty = character(), Value = numeric(), is_county = logical()))
+          
+          county_avg <- mean(dummy_subs$Value, na.rm = TRUE)
+          return(
+            bind_rows(
+              dummy_subs %>% slice_head(n = top_n),
+              tibble(Subcounty = cnty, Value = county_avg, is_county = TRUE)
+            ) %>% arrange(desc(Value))
+          )
+        }
         
-        county_avg <- mean(df[[ind]], na.rm=TRUE)
+        # Filter live data
+        df <- live_df %>%
+          mutate(County_clean    = normalize_name(County),
+                 Subcounty_clean = normalize_name(Subcounty))
+        
+        if (!is.null(cnty) && cnty != "Kenya") df <- df %>% filter(County_clean    == normalize_name(cnty))
+        if (!is.null(sub)  && sub  != "All")   df <- df %>% filter(Subcounty_clean == normalize_name(sub))
+        
+        county_avg <- suppressWarnings(mean(df[[ind]], na.rm = TRUE))
         if (is.nan(county_avg)) county_avg <- NA_real_
         
         df_top <- df %>% group_by(Subcounty) %>%
-          summarise(Value=mean(.data[[ind]],na.rm=TRUE),.groups="drop") %>%
-          arrange(desc(Value)) %>% slice_head(n=top_n)
+          summarise(Value = mean(.data[[ind]], na.rm = TRUE), .groups = "drop") %>%
+          arrange(desc(Value)) %>% slice_head(n = top_n)
         
-        bind_rows(df_top %>% mutate(is_county=FALSE),
-                  tibble(Subcounty=cnty, Value=county_avg, is_county=TRUE)) %>%
-          arrange(desc(Value))
+        # Fill missing subcounties with dummy if toggled on
+        if (use_dummy_here) {
+          shp_subs <- subc_shp %>% st_drop_geometry() %>% distinct(Subcounty)
+          if (!is.null(cnty) && cnty != "Kenya")
+            shp_subs <- subc_shp %>% filter(County == cnty) %>% st_drop_geometry() %>% distinct(Subcounty)
+          missing <- shp_subs %>% filter(!Subcounty %in% df_top$Subcounty)
+          if (nrow(missing) > 0) {
+            df_top <- bind_rows(df_top,
+                                missing %>% mutate(Value = round(runif(n(), 10, 90), 1))
+            ) %>% arrange(desc(Value)) %>% slice_head(n = top_n)
+          }
+        }
+        
+        if (!use_dummy_here && all(is.na(df_top$Value)))
+          return(tibble(Subcounty = character(), Value = numeric(), is_county = logical()))
+        
+        bind_rows(
+          df_top %>% mutate(is_county = FALSE),
+          tibble(Subcounty = cnty, Value = county_avg, is_county = TRUE)
+        ) %>% arrange(desc(Value))
       })
       
       # ── Shared subcounty chart builder ─────────────────
