@@ -39,7 +39,7 @@ cat(sprintf("  pcn_tool2_ready: %d rows written\n", nrow(pcn_ready)))
 
 # --- 4. PCN Establishment data (reads from Google Sheets) ---
 # To update: edit the Google Sheet — pipeline picks it up automatically that night
-ESTABLISHMENT_SHEET_URL <- "https://docs.google.com/spreadsheets/d/YOUR_SHEET_ID/export?format=csv"
+ESTABLISHMENT_SHEET_URL <- "https://docs.google.com/spreadsheets/d/1-A9vSkp4hmHcCg-TaBaXfOCCuAB-OZXrjKkvzzfKL2I/export?format=csv"
 
 tryCatch({
   pcn_est <- read_csv(ESTABLISHMENT_SHEET_URL, show_col_types = FALSE)
