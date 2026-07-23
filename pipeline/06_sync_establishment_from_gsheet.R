@@ -1,5 +1,3 @@
-
-06 sync establishment from gsheet · R
 # ============================================================
 # 06_sync_establishment_from_gsheet.R
 # Syncs the PCN establishment register from Google Sheets
