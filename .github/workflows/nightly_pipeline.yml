@@ -68,15 +68,16 @@ jobs:
           SUPABASE_HOST: ${{ secrets.SUPABASE_HOST }}
           SUPABASE_USER: ${{ secrets.SUPABASE_USER }}
           SUPABASE_PASS: ${{ secrets.SUPABASE_PASS }}
-
+          
       - name: "Step 6 - Sync PCN establishment from Google Sheets"
         run: Rscript pipeline/06_sync_establishment_from_gsheet.R
         env:
           SUPABASE_HOST: ${{ secrets.SUPABASE_HOST }}
           SUPABASE_USER: ${{ secrets.SUPABASE_USER }}
           SUPABASE_PASS: ${{ secrets.SUPABASE_PASS }}
-          PCN_SHEET_CSV_URL: ${{ secrets.PCN_SHEET_CSV_URL }}  
-
+          PCN_SHEET_ID: ${{ secrets.PCN_SHEET_ID }}
+          GSHEET_SA_KEY: ${{ secrets.GSHEET_SA_KEY }}
+          
       - name: Commit pcn_lookup.csv to repo
         run: |
           git config user.name  "github-actions[bot]"
